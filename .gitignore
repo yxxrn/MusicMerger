@@ -1,0 +1,54 @@
+# User media, generated runs, historical backups and local model weights
+/inputs/
+/outputs/
+/archive/
+/.models/
+MusicMerger-output/
+*.mp4
+*.mp3
+*.wav
+*.flac
+*.ass
+*.log
+*.npy
+*.safetensors
+*.onnx
+*.pt
+*.pth
+.karaoke_cache.json*
+
+# Private/local working notes and verification snapshots; publish only the guide
+/docs/*
+!/docs/DEVELOPMENT.md
+
+# User-supplied font/logo are retained locally, not redistributed by default
+/assets/fonts/*
+!/assets/fonts/.gitkeep
+/assets/images/*
+!/assets/images/.gitkeep
+
+# Python/runtime/editor state
+__pycache__/
+*.py[cod]
+.venv*/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+*.egg-info/
+.codegraph/
+.semble/
+.codex/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key

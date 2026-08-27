@@ -1,0 +1,7 @@
+# Optional installation for a new machine; the current machine already has these.
+# Tested runtime versions are recorded in docs/SIMPLE-CLI.md, not a complete lockfile.
+-r requirements.txt
+numpy>=1.26,<3
+torch>=2.6,<3
+transformers>=4.46,<6
+safetensors>=0.4
