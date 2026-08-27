@@ -55,7 +55,7 @@ class WorkflowTests(unittest.TestCase):
             staged.write_bytes(b'complete video')
             (run / 'support' / 'song.ass').write_text('subtitle')
             final = workflow.publish(staged, run, 'full')
-            self.assertEqual(final.parent.name, 'final')
+            self.assertEqual(final, Path(folder) / 'HASIL' / 'song-final.mp4')
             self.assertEqual(list(final.parent.iterdir()), [final])
             self.assertTrue((run / 'support' / 'song.ass').exists())
 
@@ -67,6 +67,174 @@ class WorkflowTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 workflow.publish(partial, run, 'full')
             self.assertTrue(partial.exists())
+
+    def test_new_final_archives_previous_and_updates_its_status(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            first = workflow.reserve_run(folder, 'full', stamp='first')
+            staged = first / 'support/song.mp4'; staged.write_bytes(b'old video')
+            latest = workflow.publish(staged, first, 'full', song_name='my song')
+            (first / 'status.json').write_text(json.dumps({'status': 'complete', 'output': str(latest)}))
+            second = workflow.reserve_run(folder, 'full', stamp='second')
+            staged = second / 'support/song.mp4'; staged.write_bytes(b'new video')
+            result = workflow.publish(staged, second, 'full', song_name='my song')
+            self.assertEqual(result, latest)
+            self.assertEqual(result.read_bytes(), b'new video')
+            previous = json.loads((first / 'status.json').read_text())
+            self.assertEqual(Path(previous['output']).read_bytes(), b'old video')
+            self.assertEqual(Path(previous['output']).parent, first / 'final')
+            self.assertEqual(list((folder / 'HASIL').iterdir()), [latest])
+
+    def test_preview_does_not_replace_latest_final(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            full = workflow.reserve_run(folder, 'full')
+            staged = full / 'support/song.mp4'; staged.write_bytes(b'full')
+            latest = workflow.publish(staged, full, 'full')
+            preview = workflow.reserve_run(folder, 'preview')
+            staged = preview / 'support/song.mp4'; staged.write_bytes(b'preview')
+            result = workflow.publish(staged, preview, 'preview')
+            self.assertEqual(result.parent, preview / 'preview')
+            self.assertEqual(latest.read_bytes(), b'full')
+
+    def test_unknown_result_collision_is_not_overwritten(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory); (folder / 'HASIL').mkdir()
+            target = folder / 'HASIL/song-final.mp4'; target.write_bytes(b'user file')
+            run = workflow.reserve_run(folder, 'full')
+            staged = run / 'support/song.mp4'; staged.write_bytes(b'new')
+            with self.assertRaises(ValueError):
+                workflow.publish(staged, run, 'full')
+            self.assertEqual(target.read_bytes(), b'user file')
+            self.assertTrue(staged.exists())
+
+    def test_legacy_final_is_moved_without_copying_or_reencoding(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            run = workflow.reserve_run(folder, 'full')
+            legacy = run / 'final/song.mp4'; legacy.write_bytes(b'original video')
+            result = workflow.publish(legacy, run, 'full', song_name='Maple Season')
+            self.assertEqual(result, folder / 'HASIL/Maple Season-final.mp4')
+            self.assertEqual(result.read_bytes(), b'original video')
+            self.assertFalse(legacy.exists())
+
+    def test_empty_final_keeps_previous_result(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            first = workflow.reserve_run(folder, 'full')
+            staged = first / 'support/song.mp4'; staged.write_bytes(b'old')
+            latest = workflow.publish(staged, first, 'full')
+            second = workflow.reserve_run(folder, 'full')
+            empty = second / 'support/song.mp4'; empty.touch()
+            with self.assertRaises(ValueError):
+                workflow.publish(empty, second, 'full')
+            self.assertEqual(latest.read_bytes(), b'old')
+
+    def test_result_folder_does_not_become_a_second_video_input(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            for name in ('source.mp4', 'song.mp3', 'lyrics.md'):
+                (folder / name).write_bytes(b'original')
+            run = workflow.reserve_run(folder, 'full')
+            staged = run / 'support/song.mp4'; staged.write_bytes(b'output')
+            workflow.publish(staged, run, 'full')
+            self.assertEqual(workflow.karaoke.input_files(folder)[0], folder / 'source.mp4')
+
+    def test_publication_failure_restores_previous_video_and_status(self):
+        from musicmerger import publication
+        for failure in ('move', 'manifest'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                folder = Path(directory)
+                first = workflow.reserve_run(folder, 'full')
+                staged = first / 'support/song.mp4'; staged.write_bytes(b'old')
+                latest = workflow.publish(staged, first, 'full')
+                old_status = {'status': 'complete', 'output': str(latest)}
+                (first / 'status.json').write_text(json.dumps(old_status))
+                manifest = first.parent / 'latest-final.json'
+                old_manifest = manifest.read_bytes()
+                second = workflow.reserve_run(folder, 'full')
+                staged = second / 'support/song.mp4'; staged.write_bytes(b'new')
+                original_move, original_write = publication._move, publication._write_json
+                def move(source, destination):
+                    if failure == 'move' and source == staged:
+                        raise OSError('simulated move failure')
+                    original_move(source, destination)
+                def write(path, value):
+                    if failure == 'manifest' and path == manifest:
+                        raise OSError('simulated metadata failure')
+                    original_write(path, value)
+                with mock.patch.object(publication, '_move', side_effect=move), \
+                        mock.patch.object(publication, '_write_json', side_effect=write), \
+                        self.assertRaises(OSError):
+                    workflow.publish(staged, second, 'full')
+                self.assertEqual(latest.read_bytes(), b'old')
+                self.assertEqual(staged.read_bytes(), b'new')
+                self.assertEqual(manifest.read_bytes(), old_manifest)
+                self.assertEqual(json.loads((first / 'status.json').read_text()), old_status)
+                self.assertEqual(list((first / 'final').iterdir()), [])
+                self.assertFalse((first.parent / '.publish.lock').exists())
+
+    def test_publication_refuses_changed_owned_video(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            first = workflow.reserve_run(folder, 'full')
+            staged = first / 'support/song.mp4'; staged.write_bytes(b'old')
+            latest = workflow.publish(staged, first, 'full')
+            latest.write_bytes(b'edited by user')
+            second = workflow.reserve_run(folder, 'full')
+            staged = second / 'support/song.mp4'; staged.write_bytes(b'new')
+            with self.assertRaisesRegex(ValueError, 'berubah'):
+                workflow.publish(staged, second, 'full')
+            self.assertEqual(latest.read_bytes(), b'edited by user')
+            self.assertTrue(staged.exists())
+
+    def test_publication_lock_does_not_get_removed_by_a_second_publisher(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            run = workflow.reserve_run(folder, 'full')
+            staged = run / 'support/song.mp4'; staged.write_bytes(b'new')
+            lock = run.parent / '.publish.lock'; lock.write_text('other job')
+            with self.assertRaises(RuntimeError):
+                workflow.publish(staged, run, 'full')
+            self.assertEqual(lock.read_text(), 'other job')
+            self.assertTrue(staged.exists())
+
+    def test_publication_rejects_unsafe_names_and_manifest_paths(self):
+        for name in ('../outside', '..', 'a/b', 'a\\b', 'C:outside'):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                folder = Path(directory)
+                run = workflow.reserve_run(folder, 'full')
+                staged = run / 'support/song.mp4'; staged.write_bytes(b'new')
+                with self.assertRaises(ValueError):
+                    workflow.publish(staged, run, 'full', song_name=name)
+                manifest = run.parent / 'latest-final.json'
+                manifest.write_text(json.dumps({'schema': 1, 'run': name, 'filename': 'song-final.mp4'}))
+                with self.assertRaises(ValueError):
+                    workflow.publish(staged, run, 'full')
+                self.assertTrue(staged.exists())
+
+    def test_publication_refuses_linked_result_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            run = workflow.reserve_run(folder, 'full')
+            staged = run / 'support/song.mp4'; staged.write_bytes(b'new')
+            with mock.patch.object(Path, 'is_symlink', autospec=True,
+                                   side_effect=lambda path: path == folder / 'HASIL'):
+                with self.assertRaisesRegex(ValueError, 'link/junction'):
+                    workflow.publish(staged, run, 'full')
+            self.assertTrue(staged.exists())
+
+    def test_changed_song_name_archives_previous_without_cluttering_results(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            first = workflow.reserve_run(folder, 'full')
+            staged = first / 'support/song.mp4'; staged.write_bytes(b'old')
+            previous = workflow.publish(staged, first, 'full', song_name='first')
+            second = workflow.reserve_run(folder, 'full')
+            staged = second / 'support/song.mp4'; staged.write_bytes(b'new')
+            latest = workflow.publish(staged, second, 'full', song_name='second')
+            self.assertEqual(list((folder / 'HASIL').iterdir()), [latest])
+            self.assertEqual((first / 'final' / previous.name).read_bytes(), b'old')
 
     @staticmethod
     def payload():
@@ -208,7 +376,7 @@ class WorkflowTests(unittest.TestCase):
                     mock.patch('musicmerger.workflow.run_command', side_effect=worker) as process:
                 result = workflow.run(args)
             self.assertEqual(process.call_count, 2)
-            self.assertEqual(result.parent.name, 'final')
+            self.assertEqual(result, folder / 'HASIL/music-final.mp4')
 
     def test_failed_worker_records_status_without_publishing(self):
         from musicmerger import renderer as karaoke

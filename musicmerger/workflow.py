@@ -9,6 +9,7 @@ import sys
 from . import renderer as karaoke
 from .acoustic import apply_timing_override
 from .process import run_command
+from .publication import publish
 
 from .paths import ROOT
 
@@ -31,17 +32,6 @@ def reserve_run(folder, mode, stamp=None):
             (run / name).mkdir()
         return run
     raise ValueError('Nama output habis; gunakan folder baru')
-
-
-def publish(staged, run, mode):
-    if (staged.parent != run / 'support' or staged.suffix != '.mp4'
-            or '.partial' in staged.name or not staged.is_file() or not staged.stat().st_size):
-        raise ValueError('Hanya MP4 selesai dari support yang boleh dipublikasikan')
-    target = run / ('preview' if mode == 'preview' else 'final') / staged.name
-    if target.exists():
-        raise ValueError('Hasil sudah ada, tidak ditimpa')
-    staged.rename(target)
-    return target
 
 
 def validate_timing(payload, lyrics, audio_hash, lyrics_hash, duration):
@@ -151,7 +141,7 @@ def run(args):
         run_command(command, job / 'support/render-console.log',
                     watch_log=job / 'support' / f'{folder.name}.ffmpeg.log', target_seconds=target_seconds)
         print('[3/3] Pisahkan MP4 selesai dari subtitle dan file pendukung.', flush=True)
-        result = publish(job / 'support' / f'{folder.name}.mp4', job, args.mode)
+        result = publish(job / 'support' / f'{folder.name}.mp4', job, args.mode, song_name=audio.stem)
         checkpoint('done', status='complete', output=str(result))
         return result
     except BaseException as exc:

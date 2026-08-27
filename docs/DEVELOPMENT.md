@@ -5,7 +5,8 @@
 | Modul | Tanggung jawab |
 | --- | --- |
 | `musicmerger/__main__.py`, `cli.py` | Entry point, menu, argumen, pembatalan |
-| `workflow.py` | Validasi input, reuse timing, run unik, publikasi MP4 |
+| `workflow.py` | Validasi input, reuse timing, run unik |
+| `publication.py` | Publikasi HASIL, manifest kepemilikan, pengarsipan versi sebelumnya |
 | `sync.py` | Transkripsi, pemilihan model bahasa, orkestrasi alignment |
 | `process.py` | Subprocess, log, progres, penutupan proses turunannya |
 | `renderer.py` | CLI lanjutan, parser lirik, cache, ASS, render FFmpeg |
@@ -37,7 +38,16 @@ python -B -m unittest discover -s tests -p test_project_layout.py -q
 
 - Bahan asli dan cache lama tidak ditimpa. Setiap run memakai folder unik.
 - Hash audio/lirik, isi kata, cakupan dan urutan timing harus cocok sebelum reuse.
-- Render yang gagal tetap di `support/`; hanya MP4 selesai masuk `preview/` atau `final/`.
+- Render yang gagal tetap di `support/`; hanya MP4 selesai masuk `preview/` atau `HASIL/`.
+- `HASIL/<nama MP3>-final.mp4` adalah final terbaru. Publikasi berikutnya memindah
+  versi lama ke `final/` run asal dan memperbarui `status.json` run lama.
+- Manifest `MusicMerger-output/latest-final.json` menyimpan run, filename dan SHA256.
+  Publikasi memeriksa kepemilikan, menolak link/junction dan collision, serta memakai
+  lock eksklusif. Error normal mengembalikan file/status sebelumnya; pemutusan paksa
+  dapat menyisakan lock dan memerlukan pemeriksaan manual sebelum publikasi ulang.
+- `publish(staged, run, 'full', song_name=audio.stem)` juga menerima sumber dari
+  `run/final/` untuk migrasi hasil lama tanpa encoding. Pemanggil migrasi harus
+  memverifikasi run selesai serta hash input/output, lalu memperbarui status output.
 - Audio output tetap berasal dari MP3 asli, meskipun analisis memakai vokal terpisah.
 - GPU dipakai untuk encoding; filter dan alignment CPU tetap didukung.
 - Skor alignment adalah diagnostik, bukan persentase akurasi timing nyanyian.

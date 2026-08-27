@@ -58,7 +58,8 @@ def main(argv=None):
         args = options(argv)
         from .workflow import run
         result = run(args)
-        print(f'\nSELESAI: {result}\nUpload MP4 saja. File pendukung terpisah di folder support.')
+        print(f'\nSELESAI: {result}\nBuka folder hasil: {result.parent}\n'
+              'Upload MP4 saja. File pendukung tetap di MusicMerger-output.')
         return 0
     except (KeyboardInterrupt, EOFError):
         print('\nDibatalkan. Hasil parsial dipertahankan, bukan video final.')

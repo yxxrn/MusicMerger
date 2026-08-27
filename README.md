@@ -10,7 +10,8 @@ CLI lokal untuk menggabungkan satu video MP4, musik MP3, dan lirik Markdown menj
 - Video latar diulang dengan crossfade pada sambungan.
 - Encode GPU otomatis dengan fallback CPU.
 - Timing otomatis, reuse berdasarkan identitas audio/lirik, dan retry terbatas.
-- Output unik, MP4 terpisah dari subtitle/log; bahan asli tidak ditimpa.
+- Final terbaru langsung terlihat di `HASIL/`; versi sebelumnya masuk riwayat.
+- MP4 terpisah dari subtitle/log; bahan asli tidak ditimpa.
 
 ## Struktur repository
 
@@ -19,7 +20,8 @@ MusicMerger/
   musicmerger/                 Semua kode Python aplikasi
     __main__.py                python -m musicmerger
     cli.py                     Menu terminal
-    workflow.py                Alur pekerjaan dan output
+    workflow.py                Alur pekerjaan
+    publication.py             HASIL dan riwayat final
     sync.py                    Persiapan timing otomatis
     renderer.py                Renderer dan CLI lanjutan
     acoustic.py, timing.py      Alignment lirik
@@ -104,21 +106,38 @@ CLI renderer lama kini diakses dengan `python -B -m musicmerger.renderer --help`
 ## Output
 
 ```text
-LaguSaya/MusicMerger-output/
-  cache/                         Timing yang dapat dipakai ulang
-  <tanggal>-preview-001/
-    preview/LaguSaya.mp4
-    timing/
-    support/                     ASS, log, cache dan aset perantara
-    status.json
-  <tanggal>-full-001/
-    final/LaguSaya.mp4
-    timing/
-    support/
-    status.json
+LaguSaya/
+  HASIL/
+    musik-final.mp4               Final terbaru, nama mengikuti MP3
+  MusicMerger-output/
+    latest-final.json            Identitas hasil yang dikelola aplikasi
+    cache/                       Timing yang dapat dipakai ulang
+    <tanggal>-preview-001/
+      preview/LaguSaya.mp4        Preview tidak mengganti final
+      timing/
+      support/                   ASS, log, cache dan aset perantara
+      status.json
+    <tanggal>-full-001/
+      final/                     Versi lama disimpan di run asalnya
+      timing/
+      support/
+      status.json                Menunjuk lokasi MP4 run tersebut
 ```
 
-Lokasi hasil ditampilkan setelah **SELESAI**. Nama dibuat otomatis dan hasil lama tidak ditimpa. Upload MP4 saja. Ctrl+C membatalkan proses; file parsial dipertahankan di support dan tidak dipublikasikan sebagai final.
+Untuk render penuh, cukup buka **HASIL** di folder lagu. Setelah render baru berhasil,
+final sebelumnya dipindahkan ke `final/` pada run asalnya, lalu hasil baru menggantikannya
+di HASIL. Tidak ada salinan video tambahan atau penghapusan riwayat otomatis.
+Preview tetap berada di run masing-masing dan tidak mengubah final terbaru.
+
+Lokasi MP4 dan folder hasil ditampilkan setelah **SELESAI**. Upload MP4 saja.
+Ctrl+C membatalkan proses; file parsial tetap di support dan tidak mengganti final.
+File yang bertabrakan namanya tetapi tidak tercatat sebagai milik aplikasi, atau final
+yang telah diedit pengguna, tidak ditimpa. Simpan file pribadi di luar HASIL.
+
+Publikasi memakai `.publish.lock` dalam `MusicMerger-output` untuk mencegah dua proses
+mengganti hasil bersamaan. Jika proses dimatikan paksa saat publikasi, proses berikutnya
+berhenti: periksa HASIL, status run, dan manifest sebelum memulihkan lock. Jangan
+menghapus `latest-final.json` atau folder run final aktif saat final tersebut masih dipakai.
 
 ## Batasan
 
