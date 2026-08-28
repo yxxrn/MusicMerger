@@ -1,5 +1,4 @@
 """Deterministic thumbnails from local frames, curated fonts and approved metadata."""
-import colorsys
 import hashlib
 import io
 import itertools
@@ -9,11 +8,12 @@ from pathlib import Path
 import re
 import subprocess
 
-from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageStat
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageStat
 from fontTools.ttLib import TTFont, TTLibError
 
 from .paths import ROOT
 from .publication import _not_link
+from .thumbnail_palette import choose_palette, contrast_backdrop, luminance
 
 SIZE = (1280, 720)
 MAX_BYTES = 2 * 1024 * 1024
@@ -153,46 +153,8 @@ def layout_title(title, font_path):
     return rows
 
 
-def choose_colors(frame, context):
-    mean = ImageStat.Stat(frame.resize((32,18)).convert('RGB')).mean
-    hue, saturation, _ = colorsys.rgb_to_hsv(*(c/255 for c in mean))
-    name = ('gold' if saturation < .12 or hue < .16 or hue > .94 else
-            'mint' if hue < .46 else 'blue' if hue < .72 else 'rose')
-    calm = dict(gold=(235,193,126), mint=(176,210,177), blue=(170,204,227), rose=(223,176,192))
-    vivid = dict(gold=(255,207,99), mint=(139,237,165), blue=(126,215,255), rose=(253,159,197))
-    energy = is_energetic(context)
-    return dict(name=name, mood='energetic' if energy else 'calm',
-                accent=(vivid if energy else calm)[name], main=(249,237,207) if name=='gold' else (241,243,236))
-
-
-def luminance(rgb):
-    channels = [c/255/12.92 if c/255 <= .04045 else ((c/255+.055)/1.055)**2.4 for c in rgb]
-    return sum(c*w for c,w in zip(channels, (.2126,.7152,.0722)))
-
-
-def contrast_backdrop(frame, rows, colors):
-    """Darken the photo, never add a panel; test the brightest sampled text background."""
-    base = ImageEnhance.Brightness(frame.convert('RGB')).enhance(.88)
-    mask = Image.new('L',frame.size)
-    boxes = [r['box'] for r in rows]
-    region = (min(b[0] for b in boxes)-140, min(b[1] for b in boxes)-100,
-              max(b[2] for b in boxes)+140, max(b[3] for b in boxes)+100)
-    ImageDraw.Draw(mask).rounded_rectangle(region, radius=110, fill=255)
-    mask = mask.filter(ImageFilter.GaussianBlur(65))
-    for brightness in (.68, .60, .52, .44, .36, .28, .20):
-        darker = ImageEnhance.Brightness(frame.convert('RGB')).enhance(brightness)
-        shaded = Image.composite(darker, base, mask)
-        ratios = []
-        for index, row in enumerate(rows):
-            sample = shaded.crop(row['box']).resize((100,32))
-            pixels = (sample.getpixel((x,y)) for y in range(sample.height) for x in range(sample.width))
-            background = max(luminance(p) for p in pixels)
-            color = colors['accent'] if index == len(rows)-1 else colors['main']
-            ratios.append((luminance(color)+.05)/(background+.05))
-        if min(ratios) >= 4.5:
-            return shaded, dict(brightness=brightness, ratios=ratios, minimum=4.5, backdrop='soft_local_shade',
-                                method='brightest_resampled_pixel_in_text_boxes')
-    raise ValueError('Kontras thumbnail tidak memenuhi batas')
+def choose_colors(frame, context, rows=None):
+    return choose_palette(frame, energetic=is_energetic(context), rows=rows)
 
 
 def extract_frame(video, output):
@@ -237,7 +199,6 @@ def generate(folder, video, audio, md, output, *, font_dir=None):
         frame, timestamp = extract_frame(video, output)
     except subprocess.SubprocessError as exc:
         raise RuntimeError(f'FFmpeg/ffprobe gagal saat mengambil frame thumbnail: {exc}') from exc
-    colors = choose_colors(frame, context)
     caption = ' & '.join(font['matched_hints'][:2]).upper()
     caption_font = ImageFont.load_default(size=20)
     caption_box = None
@@ -246,14 +207,23 @@ def generate(folder, video, audio, md, output, *, font_dir=None):
     else:
         caption = ''
     contrast_rows = ([dict(box=caption_box)] if caption_box else []) + rows
-    canvas, contrast = contrast_backdrop(frame, contrast_rows, colors)
+    colors = choose_colors(frame, context, rows=contrast_rows)
+    text_mask = Image.new('L', SIZE)
+    ink = ImageDraw.Draw(text_mask)
+    for row in rows:
+        ink.text(row['origin'], row['text'],
+                 font=ImageFont.truetype(str(font['path']), row['size']), fill=255)
+    if caption:
+        ink.text((640,150), caption, font=caption_font, anchor='mt', fill=255)
+    canvas, contrast = contrast_backdrop(frame, contrast_rows, colors, text_mask=text_mask)
     shadow = Image.new('RGBA',SIZE)
     shadow_draw = ImageDraw.Draw(shadow)
     for row in rows:
         face = ImageFont.truetype(str(font['path']), row['size'])
         x,y = row['origin']
-        shadow_draw.text((x,y+4),row['text'],font=face,fill=(10,15,9,150))
-    canvas = Image.alpha_composite(canvas.convert('RGBA'), shadow.filter(ImageFilter.GaussianBlur(7)))
+        if colors['polarity'] == 'light':
+            shadow_draw.text((x,y+2),row['text'],font=face,fill=(10,15,9,90))
+    canvas = Image.alpha_composite(canvas.convert('RGBA'), shadow.filter(ImageFilter.GaussianBlur(3)))
     draw = ImageDraw.Draw(canvas)
     for index,row in enumerate(rows):
         draw.text(row['origin'],row['text'],font=ImageFont.truetype(str(font['path']),row['size']),

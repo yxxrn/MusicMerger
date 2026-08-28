@@ -8,6 +8,7 @@
 | `workflow.py` | Validasi input, reuse timing, run unik |
 | `publication.py` | Publikasi HASIL, manifest kepemilikan, pengarsipan versi sebelumnya |
 | `thumbnail.py`, `thumbnail-fonts.json` | Metadata, font lokal, pemilihan frame, layout glyph, palet/kontras JPEG |
+| `thumbnail_palette.py` | Kelompok warna foto, kandidat harmoni, polaritas teks dan koreksi kontras lokal |
 | `sync.py` | Transkripsi, pemilihan model bahasa, orkestrasi alignment |
 | `fallback.py` | Seleksi lirik, partisi indeks asli, validasi omission dan batas interval |
 | `process.py` | Subprocess, log, progres, penutupan proses turunannya |
@@ -95,9 +96,29 @@ python -B -m unittest discover -s tests -p test_project_layout.py -q
   optis. Tidak ada substitusi karakter/pemotongan judul diam-diam.
 - `layout_title` mengukur kandidat 1–3 baris (maks. 30 kata) dalam area aman,
   memberi bobot lebih besar pada baris akhir dan menghindari pemisahan buruk.
-- Palet harmonis terhadap warna rata-rata frame; mood energik hanya menaikkan
-  aksen. Soft shade di area teks diuji terhadap pixel paling terang dari sampel
-  tiap bbox (termasuk caption) untuk kontras >=4.5. Laporan bukan klaim kontras
+- Palet v2 memakai 12 cluster RGB dari sampel 160x90 (Pillow median cut), lalu
+  mengelompokkan hue kromatik sambil mempertahankan sumber warna sekunder.
+  Kandidat tonal/analogous/complementary dan neutral tersedia dalam polaritas
+  light/dark. Luminans sasaran dibuat sebanding agar hue tertentu tidak menang
+  hanya karena secara intrinsik lebih terang. Mood energik menaikkan saturasi.
+- Skor menggabungkan besarnya koreksi lokal dan preferensi harmoni berdasarkan
+  hue/exposure; tidak memakai nomor folder, judul, atau warna acak. Foto hampir
+  monokrom bisa tetap memilih keluarga yang sama; ini bukan model estetika/vision.
+- Tidak ada penggelapan global. Generator menggambar mask glyph judul/caption
+  dengan font/posisi aktual. Koreksi blend hitam/putih hanya pada mask tersebut,
+  dilatasi 3 px dengan Gaussian blur 2 px di tepinya; ruang kosong antarkata dan
+  antarbaris tidak diisi blok. Alpha dibatasi 189/255 untuk teks terang dan
+  140/255 untuk teks gelap; bayangan dekoratif juga dipersempit (blur 3 px).
+- Kontras simetris (luminans terang+0.05)/(luminans gelap+0.05) diuji terhadap
+  setiap pixel unik pada sampel 100x32. Seleksi palet masih menilai bbox agar
+  warna tetap stabil; verifikasi akhir memakai nearest sampling yang sejajar
+  dengan mask, hanya inti glyph coverage >=192/255. Pencarian alpha menargetkan
+  4.55, lalu hasil compositing aktual diverifikasi >=4.5. Gagal berarti berhenti.
+  Angka ini tidak berlaku untuk ruang kosong bbox, piksel antialias tipis, atau
+  tepian halo. Laporan mencatat coverage= glyphs dan support_area_fraction.
+  Helper tanpa text_mask tetap mendukung koreksi bbox; generator selalu memasok
+  mask glyph. Mask kosong/tidak sesuai ukuran ditolak.
+  Bayangan teks hanya dipakai untuk polaritas terang. Laporan bukan klaim kontras
   setiap pixel setelah kompresi JPEG atau jaminan kualitas editorial.
 - Tiga kandidat frame 25/40/65% dipilih berdasarkan paparan/detail, mengutamakan
   posisi 40% bila kualitas setara. Tidak ada model vision/audio dan tidak ada

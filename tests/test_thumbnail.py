@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from PIL import Image, ImageFont
+from PIL import Image, ImageDraw, ImageFont
 from fontTools.fontBuilder import FontBuilder
 from fontTools.pens.ttGlyphPen import TTGlyphPen
 
@@ -126,6 +126,65 @@ class ThumbnailTests(unittest.TestCase):
         self.assertGreaterEqual(min(report['ratios']), 4.5)
         self.assertLess(shaded.getpixel((640, 360))[0], 255)
 
+    def test_palette_uses_dark_or_light_text_without_unnecessary_dimming(self):
+        rows = thumb.layout_title('Shape the Wood', self.font)
+        for rgb, polarity in [((238, 241, 235), 'dark'), ((20, 27, 24), 'light')]:
+            with self.subTest(polarity=polarity):
+                frame = Image.new('RGB', (1280, 720), rgb)
+                colors = thumb.choose_colors(frame, 'calm folk', rows=rows)
+                self.assertEqual(colors['polarity'], polarity)
+                canvas, report = thumb.contrast_backdrop(frame, rows, colors)
+                self.assertEqual(canvas.tobytes(), frame.tobytes())
+                self.assertGreaterEqual(min(report['ratios']), 4.5)
+
+    def test_dominant_colors_preserve_secondary_hue_and_are_deterministic(self):
+        colors = []
+        for rgb in ((42, 145, 122), (180, 72, 94)):
+            frame = Image.new('RGB', (1280, 720), (155, 155, 155))
+            frame.paste(rgb, (0, 0, 320, 720))
+            result = thumb.choose_colors(frame, 'calm')
+            self.assertEqual(result, thumb.choose_colors(frame, 'calm'))
+            self.assertTrue(any(c['kind'] == 'chromatic' for c in result['dominant_colors']))
+            colors.append(result['accent'])
+        self.assertNotEqual(*colors)
+
+    def test_local_contrast_correction_preserves_pixels_outside_text_region(self):
+        frame = Image.new('RGB', (1280, 720), (250, 250, 250))
+        rows = [dict(box=(440, 300, 840, 420))]
+        colors = dict(main=(245, 245, 245), accent=(235, 240, 230), polarity='light')
+        canvas, report = thumb.contrast_backdrop(frame, rows, colors)
+        self.assertGreaterEqual(min(report['ratios']), 4.5)
+        self.assertGreater(report['strength'], 0)
+        self.assertEqual(canvas.getpixel((0, 0)), frame.getpixel((0, 0)))
+        self.assertLess(canvas.getpixel((640, 360))[0], 250)
+
+    def test_neutral_frames_have_a_safe_palette_with_contrast_in_both_directions(self):
+        rows = [dict(box=(240, 250, 1040, 510))]
+        for value in (0, 110, 180, 255):
+            with self.subTest(value=value):
+                frame = Image.new('RGB', (1280, 720), (value, value, value))
+                colors = thumb.choose_colors(frame, 'energetic', rows=rows)
+                self.assertEqual(colors['name'], 'neutral')
+                _, report = thumb.contrast_backdrop(frame, rows, colors)
+                self.assertGreaterEqual(min(report['ratios']), 4.5)
+
+    def test_glyph_contrast_support_does_not_darken_spaces_between_letters(self):
+        frame = Image.new('RGB', (1280, 720), 'white')
+        ink = Image.new('L', frame.size)
+        pen = ImageDraw.Draw(ink)
+        pen.rectangle((400, 300, 440, 420), fill=255)
+        pen.rectangle((650, 300, 690, 420), fill=255)
+        rows = [dict(box=(400, 300, 691, 421))]
+        colors = dict(main=(245, 245, 245), accent=(210, 230, 200), polarity='light')
+        canvas, report = thumb.contrast_backdrop(frame, rows, colors, text_mask=ink)
+        self.assertEqual(canvas.getpixel((550, 360)), (255, 255, 255))
+        self.assertEqual(canvas.getpixel((20, 360)), (255, 255, 255))
+        self.assertLess(canvas.getpixel((420, 360))[0], 255)
+        self.assertGreaterEqual(min(report['ratios']), 4.5)
+        self.assertEqual(report['coverage'], 'glyphs')
+        with self.assertRaisesRegex(ValueError, 'mask'):
+            thumb.contrast_backdrop(frame, rows, colors, text_mask=Image.new('L', frame.size))
+
     def test_generate_writes_valid_jpeg_and_report_without_touching_sources(self):
         md, data = self.metadata()
         video = self.root / 'video.mp4'; video.write_bytes(b'source')
@@ -141,11 +200,20 @@ class ThumbnailTests(unittest.TestCase):
             image.load()
         report = json.loads((output / 'thumbnail-report.json').read_text())
         self.assertEqual(report['font']['family'], 'Test')
+        self.assertEqual(report['contrast']['coverage'], 'glyphs')
         self.assertGreaterEqual(min(report['contrast']['ratios']), 4.5)
         self.assertLess(result['thumbnail.jpg'].stat().st_size, 2 * 1024 * 1024)
         for p, contents in sources.items(): self.assertEqual(p.read_bytes(), contents)
         with self.assertRaises(ValueError):
             thumb.generate(self.root, video, audio, md, output, font_dir=self.root)
+        bright_output = self.root / 'bright-support'; bright_output.mkdir()
+        with mock.patch.object(thumb, 'extract_frame', return_value=(Image.new('RGB', (1280,720), 'white'), 8.0)):
+            thumb.generate(self.root, video, audio, md, bright_output, font_dir=self.root)
+        bright_report = json.loads((bright_output/'thumbnail-report.json').read_text())
+        self.assertEqual(bright_report['colors']['polarity'], 'dark')
+        self.assertEqual(bright_report['contrast']['backdrop'], 'unchanged')
+        with Image.open(bright_output/'thumbnail.jpg') as image:
+            self.assertEqual(image.getpixel((0, 0)), (255, 255, 255))
 
 
 class ThumbnailPublicationTests(unittest.TestCase):

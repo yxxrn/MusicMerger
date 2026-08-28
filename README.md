@@ -25,6 +25,7 @@ MusicMerger/
     workflow.py                Alur pekerjaan
     publication.py             HASIL dan riwayat final
     thumbnail.py               Pemilihan font/frame, layout dan JPEG thumbnail
+    thumbnail_palette.py       Warna dominan, harmoni dan kontras teks terang/gelap
     thumbnail-fonts.json       Katalog karakter font (tanpa file font)
     sync.py                    Persiapan timing otomatis
     fallback.py                Pemilihan lirik dan catatan bagian yang dilewati
@@ -164,9 +165,21 @@ Klausa negatif seperti `no EDM` tidak dipakai sebagai rekomendasi genre. Semua
 karakter judul harus tersedia di font; tidak ada fallback sebagian huruf secara
 diam-diam. Ukuran dan pemisahan 1–3 baris dihitung dari batas glyph aktual.
 
-Hasil JPEG 1280×720 di bawah 2 MiB, tanpa bingkai/footer/panel. Warna aksen
-mengikuti warna frame, kalem untuk lagu tenang dan lebih cerah untuk mood energik.
-Foto digelapkan secara lembut di area teks hingga kontras sampel minimum 4.5:1.
+Hasil JPEG 1280×720 di bawah 2 MiB, tanpa bingkai/footer/panel. Pemilih palet
+membaca beberapa kelompok warna dominan dan sekunder, termasuk warna netral dan
+bayangan. Kandidat warna senada, berdekatan, atau komplementer dinilai bersama
+kontras di area judul/caption. Hasil bisa biru kelabu, sage, olive, teal, peach,
+dan lainnya; tidak lagi terbatas pada empat preset dari rata-rata seluruh foto.
+
+Teks dapat gelap pada area terang atau terang pada area gelap. Foto tidak lagi
+digelapkan secara global. Perlindungan kontras mengikuti bentuk huruf dengan
+bayangan sempit dan lembut; tidak membentuk area gelap besar yang menutupi ruang
+kosong di sela judul. Kontras sampel inti huruf sebelum teks digambar ditargetkan
+minimum 4.5:1, bukan seluruh kotak judul. Pemilih mengutamakan koreksi yang lebih kecil
+sambil mempertimbangkan harmoni warna. Mood energik menaikkan saturasi aksen.
+Laporan menyimpan warna dominan, harmoni, pilihan terang/gelap dan besar koreksi.
+Hasil deterministik untuk input yang sama; foto serupa tetap boleh memilih warna
+serupa. Tidak ada pemaksaan satu warna unik per folder.
 Ini tidak harus identik dengan palet karaoke dan tidak mengubah style video.
 Pemilihan font/genre dan pemisahan judul bersifat heuristik; tetap review hasilnya.
 Tidak membutuhkan Chrome, Node, layanan berbayar, atau model AI tambahan.
