@@ -5,6 +5,7 @@ Model probabilities are diagnostics, not calibrated singing timing accuracy.
 """
 import copy
 import math
+from .fallback import POLICIES, validate_partition, omission_windows
 
 
 def ctc_word_spans(log_probs, words, vocabulary, blank_id):
@@ -64,9 +65,11 @@ def ctc_word_spans(log_probs, words, vocabulary, blank_id):
 
 
 def apply_timing_override(lines, payload, *, audio_sha256, lyrics_sha256,
-                          start, duration, song_duration):
+                          start, duration, song_duration, lyric_policy='auto'):
     """Validate identity, complete window coverage and ordered words before use."""
-    if payload.get('schema') != 1 or payload.get('method') != 'wav2vec2_ctc_forced_alignment':
+    if (lyric_policy not in POLICIES or type(payload.get('schema')) is not int
+            or payload.get('schema') not in (1, 2)
+            or payload.get('method') != 'wav2vec2_ctc_forced_alignment'):
         raise ValueError('Format timing acoustic tidak didukung')
     if payload.get('audio_sha256') != audio_sha256 or payload.get('lyrics_sha256') != lyrics_sha256:
         raise ValueError('Timing acoustic bukan untuk audio/lirik ini')
@@ -76,10 +79,20 @@ def apply_timing_override(lines, payload, *, audio_sha256, lyrics_sha256,
             or start < coverage[0] or start + duration > coverage[1] + 0.001):
         raise ValueError('Rentang render di luar cakupan timing acoustic')
     result = copy.deepcopy(lines)
+    omitted = set()
+    if payload['schema'] == 2:
+        if lyric_policy == 'strict':
+            raise ValueError('Mode strict menolak timing dengan lirik yang dilewati')
+        if coverage[0] != 0 or abs(coverage[1] - song_duration) > .001:
+            raise ValueError('Timing fallback memerlukan cakupan seluruh lagu')
+        omitted = validate_partition(lines, payload)
+        for index in omitted:
+            result[index].update(wstart=None, wend=None, words=[], omitted=True,
+                                 issues=['lyric_omitted_after_retry'], needs_review=True)
     seen = set()
     for update in payload.get('lines', []):
         index = update.get('index')
-        if not isinstance(index, int) or index in seen or not 0 <= index < len(lines):
+        if type(index) is not int or index in seen or not 0 <= index < len(lines):
             raise ValueError('Indeks timing acoustic duplikat/tidak valid')
         seen.add(index)
         line = result[index]
@@ -103,6 +116,8 @@ def apply_timing_override(lines, payload, *, audio_sha256, lyrics_sha256,
         raise ValueError('Timing acoustic tidak berisi baris')
     # No partly corrected phrase/window, including 120 ms subtitle fade handles.
     for i, line in enumerate(lines):
+        if i in omitted or (payload['schema'] == 2 and i in seen):
+            continue
         if line.get('wstart') is None:
             raise ValueError('Baris tanpa anchor harus diperiksa sebelum timing override')
         if line['wend'] + 0.12 > coverage[0] and line['wstart'] - 0.12 < coverage[1] and i not in seen:
@@ -110,6 +125,8 @@ def apply_timing_override(lines, payload, *, audio_sha256, lyrics_sha256,
     timed = [line for line in result if line.get('wstart') is not None]
     if any(a['wend'] > b['wstart'] + 0.000001 for a, b in zip(timed, timed[1:])):
         raise ValueError('Timing acoustic bertabrakan dengan baris tetangga')
+    if payload['schema'] == 2 and payload.get('omission_windows') != omission_windows(payload, song_duration):
+        raise ValueError('Rentang omission tidak cocok dengan timing tetangga')
     return result
 
 
@@ -120,7 +137,8 @@ def alignment_batches(lines, song_duration, preserved=0):
     groups = []
     for index in range(preserved, len(lines)):
         if (not groups or lines[index]['wend'] - lines[groups[-1][0]]['wstart'] > 26
-                or lines[index]['wstart'] - lines[index - 1]['wend'] > 4):
+                or lines[index]['wstart'] - lines[index - 1]['wend'] > 4
+                or lines[index].get('source_index', index) != lines[index-1].get('source_index', index-1) + 1):
             groups.append([])
         groups[-1].append(index)
     batches = []
@@ -202,6 +220,18 @@ def main(argv=None):
     source_lyrics = karaoke.parse_lyrics(lyrics_path)
     if [line['words_text'] for line in lines] != [karaoke.WORD_RE.findall(text) for _, text in source_lyrics]:
         parser.error('Kata referensi berbeda dari lirik input')
+    source_lines = lines
+    selection = reference.get('selection')
+    source_indices = list(range(len(lines)))
+    if selection:
+        if not args.full or args.reuse_intro:
+            parser.error('Referensi fallback memerlukan --full tanpa --reuse-intro')
+        omitted_indices = {x['index'] for x in selection['omitted_lines']}
+        retained = [dict(index=i, words_text=x['words_text']) for i, x in enumerate(lines)
+                    if i not in omitted_indices]
+        validate_partition(lines, dict(selection, lines=retained))
+        source_indices = [x['index'] for x in retained]
+        lines = [dict(lines[i], source_index=i) for i in source_indices]
     song_duration = karaoke.ffprobe_duration(audio_path)
     analysis_path = args.analysis_audio.resolve() if args.analysis_audio else audio_path
     if analysis_path != audio_path:
@@ -312,8 +342,15 @@ def main(argv=None):
                 row['low_score_words'] = [w for w, s in zip(row['words_text'], absolute) if s['score'] < .5]
                 payload['refinement']['accepted'] += 1
     payload['quality'] = timing_quality(payload['lines'])
+    if selection:
+        payload.update(selection, schema=2)
+        for row in payload['lines']:
+            row['index'] = source_indices[row['index']]
+        for window in payload['windows']:
+            window['indices'] = [source_indices[i] for i in window['indices']]
+        payload['omission_windows'] = omission_windows(payload, song_duration)
     print(f'Diagnostik timing: {payload["quality"]}; retry {payload["refinement"]}', flush=True)
-    apply_timing_override(lines, payload, audio_sha256=audio_id, lyrics_sha256=lyrics_id,
+    apply_timing_override(source_lines, payload, audio_sha256=audio_id, lyrics_sha256=lyrics_id,
                           start=args.start, duration=args.duration, song_duration=song_duration)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     with args.out.open('x', encoding='utf-8') as stream:

@@ -23,6 +23,7 @@ MusicMerger/
     workflow.py                Alur pekerjaan
     publication.py             HASIL dan riwayat final
     sync.py                    Persiapan timing otomatis
+    fallback.py                Pemilihan lirik dan catatan bagian yang dilewati
     renderer.py                Renderer dan CLI lanjutan
     acoustic.py, timing.py      Alignment lirik
     encoder.py, loop.py         Encoding dan video loop
@@ -99,11 +100,38 @@ python -B -m musicmerger 'D:\Folder Lagu' --mode preview --start 3 --duration 15
 python -B -m musicmerger 'D:\Folder Lagu' --mode full
 ```
 
-Opsi tambahan: `--encoder cpu`, `--language en`, `--width 640` (preview), `--timing-file <file.json>`, `--vocals off`. Lihat `python -B -m musicmerger --help`.
+Opsi tambahan: `--encoder cpu`, `--language en`, `--width 640` (preview), `--timing-file <file.json>`, `--vocals off`, `--lyric-policy strict`. Lihat `python -B -m musicmerger --help`.
 
 CLI renderer lama kini diakses dengan `python -B -m musicmerger.renderer --help`. Jangan menjalankan file di dalam paket secara langsung; gunakan `-m` agar import dan worker tetap benar.
 
 ## Output
+
+### Lirik tidak jelas atau improvisasi
+
+Mode bawaan `--lyric-policy auto` mencoba model kedua jika kecocokan lirik lemah.
+Baris yang masih tidak didukung dilewati dalam hasil tampilan: bagian tersebut
+memakai logo tanpa teks/equalizer, lalu karaoke dilanjutkan saat lirik yang cocok
+kembali. **MD, audio, dan video sumber tidak diubah.** Tidak ada kata pengganti
+atau timing kata yang dikarang untuk baris yang dilewati.
+
+Kecocokan minimal per baris adalah 80% token dengan anchor tepat dan posisi yang
+masuk akal. Model kedua dapat menyelamatkan baris yang gagal pada model pertama.
+Jika kurang dari 75% total token lirik dapat dipertahankan, atau urutan waktunya
+tidak dapat ditentukan dengan aman, proses tetap berhenti untuk pemeriksaan input.
+Ini aturan konservatif, bukan persentase akurasi: ASR dapat melewatkan lirik yang
+sebenarnya dinyanyikan. Periksa preview dan laporan `support/*.alignment.json`.
+
+Gunakan `--lyric-policy strict` untuk perilaku lama yang berhenti bila masih ada
+baris tanpa anchor. Strict menolak pemakaian timing yang mencatat omission.
+Timing baru menyimpan nomor baris asli dan alasan bagian dilewati; timing lama
+yang lengkap tetap dapat digunakan. Cache ASR dari run sebelumnya hanya disalin
+bila identitas audio/model/bahasa cocok, tidak ditimpa.
+
+CLI `musicmerger` mengatur fallback saat sinkronisasi. CLI lanjutan
+`musicmerger.renderer` memakai keputusan fallback dari sidecar schema 2; ia
+tidak membuat keputusan omission baru hanya dari cache ASR.
+
+### Susunan hasil
 
 ```text
 LaguSaya/

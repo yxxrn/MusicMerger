@@ -778,6 +778,17 @@ class BackgroundLoopTests(unittest.TestCase):
 
 
 class EqualizerTests(unittest.TestCase):
+    def test_fallback_hides_spectrum_on_song_clock_without_changing_audio_branch(self):
+        command = karaoke.render_command(Path('clip.mp4'), Path('song.mp3'), Path('out.mp4'),
+            duration=10, start=8, equalizer='subtle', equalizer_hidden_windows=[(10, 15)])
+        graph = command[command.index('-filter_complex')+1]
+        self.assertIn('gte(T,2.000000)*lt(T,7.000000)', graph)
+        self.assertIn('[1:a:0]asplit=2[audio_out][viz_source]', graph)
+        self.assertIn('[audio_out]', command)
+        with self.assertRaises(ValueError):
+            karaoke.render_command(Path('v'), Path('a'), Path('o'), duration=10,
+                                   equalizer='subtle', equalizer_hidden_windows=[(3, float('nan'))])
+
     def test_cli_defaults_to_selected_subtle_and_keeps_other_modes(self):
         with mock.patch.object(karaoke, 'render') as render:
             for mode in ('off', 'subtle', 'instrumental'):
@@ -836,9 +847,10 @@ class EqualizerTests(unittest.TestCase):
                 command.assert_not_called()
 
     @staticmethod
-    def spectrum_frames(audio, mode='subtle', windows=(), start=0):
+    def spectrum_frames(audio, mode='subtle', windows=(), start=0, hidden_windows=()):
         config = karaoke.equalizer_config(mode, 640, 360)
-        graph = '[0:v]null[base];' + karaoke.equalizer_overlay_graph(config, windows, start=start)
+        graph = '[0:v]null[base];' + karaoke.equalizer_overlay_graph(
+            config, windows, start=start, hidden_windows=hidden_windows)
         graph += ';[audio_out]anullsink'
         result = subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i',
             'color=0x208040:s=640x360:r=24:d=1', '-f', 'lavfi', '-i', audio,
@@ -884,6 +896,14 @@ class EqualizerTests(unittest.TestCase):
         self.assertEqual(hidden[12], hidden[12][:3]*(640*360))
         self.assertEqual(fade[0], fade[0][:3]*(640*360))
         self.assertEqual(fade[18], middle[18])
+
+    @unittest.skipUnless(shutil.which('ffmpeg'), 'FFmpeg needed')
+    def test_fallback_middle_gap_really_hides_then_resumes_spectrum_after_preview_seek(self):
+        audio = 'sine=frequency=440:sample_rate=44100:duration=1'
+        frames = self.spectrum_frames(audio, start=10, hidden_windows=[(10.25, 10.7)])
+        self.assertGreater(sum(self.changed_columns(frames[3])), 10)
+        self.assertEqual(frames[12], frames[12][:3]*(640*360))
+        self.assertGreater(sum(self.changed_columns(frames[22])), 10)
 
     @unittest.skipUnless(shutil.which('ffmpeg'), 'FFmpeg needed')
     def test_tone_onset_stays_close_to_audio_time(self):

@@ -23,7 +23,7 @@ def equalizer_config(mode, width=1920, height=1088, rate='24'):
                 frequency_scale='log', amplitude_scale='log')
 
 
-def equalizer_overlay_graph(config, windows=(), *, start=0.0, base='base'):
+def equalizer_overlay_graph(config, windows=(), *, start=0.0, base='base', hidden_windows=()):
     """Consume base and MP3 input 1, produce equalized video and unchanged audio_out.
 
     Display columns are rasterized FFT bins, not independently aggregated bands.
@@ -39,6 +39,10 @@ def equalizer_overlay_graph(config, windows=(), *, start=0.0, base='base'):
     gap = 'clip(' + ('+'.join(fades) or '0') + ',0,1)'
     low = config['vocal_opacity'] if config['mode'] == 'subtle' else 0
     opacity = f'({low}+{config["gap_opacity"]-low}*({gap}))'
+    for begin, end in hidden_windows:
+        if not all(math.isfinite(v) for v in (begin, end)) or not 0 <= begin < end:
+            raise ValueError('Window tersembunyi equalizer tidak valid')
+        opacity += f'*(1-gte(T,{begin-start:.6f})*lt(T,{end-start:.6f}))'
     step, bar = config['step'], config['bar_width']
     inset = (step-bar)//2
     mask = f'between(mod(X,{step}),{inset},{inset+bar-1})'

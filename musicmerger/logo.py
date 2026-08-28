@@ -38,7 +38,8 @@ def logo_overlay_graph(windows, *, start=0.0, icon_height=180, fill_rgb=(255, 22
     for begin, end in windows:
         if not all(math.isfinite(v) for v in (begin, end)) or end <= begin:
             raise ValueError('Window overlay musik tidak valid')
-        fades.append(f'clip(min((T-({begin-start:.6f}))/0.3,(({end-start:.6f})-T)/0.3),0,1)')
+        fade = min(.3, (end-begin)/2)
+        fades.append(f'clip(min((T-({begin-start:.6f}))/{fade:g},(({end-start:.6f})-T)/{fade:g}),0,1)')
     opacity = '+'.join(fades) or '0'
     # Key at source resolution, then build a one-output-pixel outline at 4x.
     # Reducing the finished RGBA overlay preserves fractional edge coverage.

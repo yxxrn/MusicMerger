@@ -20,6 +20,7 @@ from .logo import DEFAULT_LOGO_FILE, LOGO_SUPERSAMPLE, package_music_logo, logo_
 from .equalizer import MODES, equalizer_config, equalizer_overlay_graph
 from .loop import loop_config, prepare_background_loop
 from .acoustic import apply_timing_override
+from .fallback import POLICIES, baseline_lines
 from .encoder import ENCODERS, encoder_args, select_encoder, run_encode, frame_size
 
 from .paths import ROOT
@@ -249,6 +250,44 @@ def instrumental_windows(lines, *, song_duration=None, offset=0.0, lyric_tail_se
     return windows
 
 
+def merge_windows(windows):
+    merged = []
+    for begin, end in sorted(windows, key=lambda pair: pair[0]):
+        if merged and begin <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([begin, end])
+    return merged
+
+
+def omission_display_windows(windows, ass, *, song_duration, offset=0.0):
+    """Subtract actual ASS events, including holds and lead-ins, from omissions."""
+    def seconds(value):
+        hour, minute, second = value.split(':')
+        return int(hour)*3600 + int(minute)*60 + float(second)
+    busy = []
+    for line in ass.read_text(encoding='utf-8').splitlines():
+        if line.startswith('Dialogue:'):
+            fields = line.split(',', 3)
+            busy.append((seconds(fields[1]), seconds(fields[2])))
+    result = []
+    for start, end in windows:
+        available = [(max(0.0, start+offset), min(song_duration, end+offset))]
+        for left, right in busy:
+            next_available = []
+            for begin, stop in available:
+                if right <= begin or left >= stop:
+                    next_available.append((begin, stop))
+                else:
+                    if begin < left:
+                        next_available.append((begin, left))
+                    if right < stop:
+                        next_available.append((right, stop))
+            available = next_available
+        result.extend([a, b] for a, b in available if b > a)
+    return merge_windows(result)
+
+
 def build_phrase_ass(lines, out_path, *, width, height, font, offset, highlight):
     phrases = split_phrases(lines)
     size, margin = phrase_font_size(width, height), round(width * 0.07)
@@ -424,7 +463,7 @@ def input_files(folder):
 def render_command(mp4, mp3, output, *, start=0.0, duration, width=None,
                    icon_file=None, instrumental_intervals=(), icon_height=180,
                    equalizer='off', equalizer_intervals=(), height=1088, rate='24', video_width=1920,
-                   icon_rgb=(255, 224, 120), encoder='libx264'):
+                   icon_rgb=(255, 224, 120), encoder='libx264', equalizer_hidden_windows=()):
     config = equalizer_config(equalizer, width or video_width, height, rate)
     filters = [f'scale={width}:-2'] if width else []
     # Seeking resets PTS; restore song time for ASS, then reset for output.
@@ -441,7 +480,8 @@ def render_command(mp4, mp3, output, *, start=0.0, duration, width=None,
         graph = '[0:v]' + ','.join(filters) + '[base]'
     if equalizer != 'off':
         graph += ';' + equalizer_overlay_graph(config, equalizer_intervals, start=start,
-                                               base='vout' if has_logo else 'base')
+                                               base='vout' if has_logo else 'base',
+                                               hidden_windows=equalizer_hidden_windows)
         command += ['-filter_complex', graph, '-map', '[equalized]']
     elif has_logo:
         command += ['-filter_complex', graph, '-map', '[vout]']
@@ -457,7 +497,7 @@ def render(folder, out_dir, *, language='en', model_name=MODEL, trust_legacy=Fal
            refresh=False, allow_estimated=False, subtitles_only=False, start=0.0,
            duration=None, width=None, offset=0.0, font=DEFAULT_FONT, show_next=True, palette='auto', layout='phrases',
            instrumental_icon=True, equalizer=DEFAULT_EQUALIZER, loop_mode='seamless', timing_file=None, encoder='auto',
-           cache_path=None):
+           cache_path=None, lyric_policy='auto'):
     folder, out_dir = folder.resolve(), out_dir.resolve()
     mp4, mp3, md = input_files(folder)
     if out_dir == folder:
@@ -489,19 +529,27 @@ def render(folder, out_dir, *, language='en', model_name=MODEL, trust_legacy=Fal
         raise ValueError('Mode loop tidak valid')
     if encoder not in ENCODERS:
         raise ValueError('Pilihan encoder tidak valid')
+    if lyric_policy not in POLICIES:
+        raise ValueError('Kebijakan lirik tidak valid')
     fonts_dir = package_font(out_dir, font)
     selected_palette = (analyze_background(mp4, float(info['format']['duration']))
                         if palette == 'auto' else palette_color(palette))
     log(f"Font: {font}; palet: {selected_palette['name']} ({palette})")
-    words = whisper_words(mp3, Path(cache_path) if cache_path is not None else folder / '.karaoke_cache.json', language=language,
-                          model_name=model_name, trust_legacy=trust_legacy, refresh=refresh)
-    lines = build_line_timing(parse_lyrics(md), words)
-    timing_payload = None
+    timing_payload = (json.loads(Path(timing_file).read_text(encoding='utf-8'))
+                      if timing_file is not None else None)
+    if timing_payload is not None and timing_payload.get('schema') == 2:
+        lines = baseline_lines(parse_lyrics(md))
+    else:
+        words = whisper_words(mp3, Path(cache_path) if cache_path is not None else folder / '.karaoke_cache.json', language=language,
+                              model_name=model_name, trust_legacy=trust_legacy, refresh=refresh)
+        lines = build_line_timing(parse_lyrics(md), words)
     if timing_file is not None:
-        timing_payload = json.loads(Path(timing_file).read_text(encoding='utf-8'))
         lines = apply_timing_override(lines, timing_payload,
             audio_sha256=audio_fingerprint(mp3)['sha256'], lyrics_sha256=audio_fingerprint(md)['sha256'],
-            start=start, duration=duration, song_duration=song_duration)
+            start=start, duration=duration, song_duration=song_duration, lyric_policy=lyric_policy)
+    omissions = timing_payload.get('omitted_lines', []) if timing_payload else []
+    if omissions and not instrumental_icon:
+        raise ValueError('Fallback lirik memerlukan logo; jangan gunakan --no-instrumental-icon')
     for line in lines:
         if line.get('wend') is not None and line['wend'] > song_duration:
             line['issues'].append('timing_past_audio_end')
@@ -534,6 +582,16 @@ def render(folder, out_dir, *, language='en', model_name=MODEL, trust_legacy=Fal
         report['style']['phrase_limits'] = {'max_words': 5, 'max_chars': 26}
         report['style']['phrase_splitter'] = 'punctuation_pause_boundary_heuristic'
         report['style']['font_size'] = phrase_font_size(int(video['width']), int(video['height']))
+    build_ass(lines, ass, width=int(video['width']), height=int(video['height']),
+              offset=offset, font=font, show_next=show_next, highlight=selected_palette['highlight'], layout=layout)
+    hidden_windows = (omission_display_windows(timing_payload['omission_windows'], ass,
+                                               song_duration=song_duration, offset=offset)
+                      if omissions else [])
+    if omissions:
+        report['lyric_fallback'] = dict(policy=timing_payload['policy'], omitted_lines=omissions,
+            raw_windows=timing_payload['omission_windows'], display_windows=hidden_windows,
+            limitation='Unsupported by ASR, not proof of absent vocals; original MD unchanged')
+        log(f'PERINGATAN: logo saja pada {hidden_windows}; baris {[x["index"]+1 for x in omissions]} dilewati')
     report['style']['instrumental_icon'] = {
         'enabled': instrumental_icon, 'shape': 'user_jpg_overlay',
         'minimum_gap_seconds': INSTRUMENTAL_MIN_SECONDS,
@@ -545,6 +603,7 @@ def render(folder, out_dir, *, language='en', model_name=MODEL, trust_legacy=Fal
     report['instrumental_windows'] = (instrumental_windows(lines, song_duration=song_duration, offset=offset,
                                                           lyric_tail_seconds=lyric_tail_seconds)
                                       if instrumental_icon else [])
+    report['instrumental_windows'] = merge_windows([*report['instrumental_windows'], *hidden_windows])
     icon_file = package_music_logo(out_dir) if report['instrumental_windows'] else None
     output_width, output_height = frame_size(int(video['width']), int(video['height']), width)
     eq_windows = instrumental_windows(lines, song_duration=song_duration, offset=offset) if equalizer != 'off' else []
@@ -561,7 +620,8 @@ def render(folder, out_dir, *, language='en', model_name=MODEL, trust_legacy=Fal
     report['style']['equalizer'] = dict(eq_config, rendered=False,
         status='subtitles_only' if subtitles_only else 'pending_render',
         audio_sha256=report['audio']['sha256'], source='MP3 input 1, unchanged output audio',
-        window_method='known_lyric_gaps_not_acoustic_detection', windows=eq_windows)
+        window_method='known_lyric_gaps_not_acoustic_detection', windows=eq_windows,
+        hidden_windows=hidden_windows)
     icon_height = max(16, round(min(output_height * 0.27, output_width * 0.5)))
     icon_rgb = PALETTES[selected_palette['name']]
     report['style']['instrumental_icon'].update({
@@ -578,8 +638,6 @@ def render(folder, out_dir, *, language='en', model_name=MODEL, trust_legacy=Fal
         log(f'PERINGATAN: timing perlu ditinjau pada baris {suspect}; lihat {report_path.name}')
     if suspect and not allow_estimated and not subtitles_only:
         raise ValueError('Render dihentikan karena timing tidak andal. Tinjau laporan; --allow-estimated-timing hanya untuk preview sadar risiko.')
-    build_ass(lines, ass, width=int(video['width']), height=int(video['height']),
-              offset=offset, font=font, show_next=show_next, highlight=selected_palette['highlight'], layout=layout)
     if subtitles_only:
         log(f'ASS + laporan: {out_dir}')
         return ass
@@ -607,7 +665,7 @@ def render(folder, out_dir, *, language='en', model_name=MODEL, trust_legacy=Fal
                                  icon_file=icon_file, instrumental_intervals=report['instrumental_windows'],
                                  icon_height=icon_height, equalizer=equalizer, equalizer_intervals=eq_windows,
                                  height=output_height, rate=rate, video_width=output_width, icon_rgb=icon_rgb,
-                                 encoder=name)
+                                 encoder=name, equalizer_hidden_windows=hidden_windows)
         log(f'Render {duration:.2f}s mulai {start:.2f}s -> {output.name}')
         log_path = out_dir / f'{folder.name}.ffmpeg.log'
         try:
@@ -646,6 +704,7 @@ def main(argv=None):
     parser.add_argument('--offset', type=float, default=0.0, help='geser teks; positif = lebih lambat')
     parser.add_argument('--timing-file', type=Path, help='timing acoustic beridentitas; render harus dalam cakupannya')
     parser.add_argument('--cache-file', type=Path, help='cache ASR terpisah (opsional; input asli tidak diubah)')
+    parser.add_argument('--lyric-policy', choices=POLICIES, default='auto')
     parser.add_argument('--encoder', choices=ENCODERS, default='auto',
                         help='auto: uji GPU lalu fallback CPU; cpu: libx264; atau paksa encoder GPU')
     parser.add_argument('--font', default=DEFAULT_FONT)
@@ -681,7 +740,8 @@ def main(argv=None):
                    start=args.start, duration=args.duration, width=args.width, offset=args.offset,
                    font=args.font, show_next=not args.no_next_line, palette=args.palette, layout=args.layout,
                    instrumental_icon=not args.no_instrumental_icon, equalizer=args.equalizer,
-                   loop_mode=args.loop_mode, timing_file=args.timing_file, encoder=args.encoder, cache_path=args.cache_file)
+                   loop_mode=args.loop_mode, timing_file=args.timing_file, encoder=args.encoder,
+                   cache_path=args.cache_file, lyric_policy=args.lyric_policy)
     except (ValueError, OSError, RuntimeError, subprocess.CalledProcessError) as exc:
         parser.exit(1, f'ERROR: {exc}\n')
     return 0

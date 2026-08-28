@@ -21,6 +21,8 @@ def options(argv=None):
     parser.add_argument('--timing-file', type=Path, help='opsional: timing CTC untuk lagu ini')
     parser.add_argument('--align-model', type=Path, help='folder model CTC lokal untuk bahasa selain en')
     parser.add_argument('--vocals', choices=('auto', 'off'), default='auto', help='gunakan Demucs jika tersedia')
+    parser.add_argument('--lyric-policy', choices=('auto', 'strict'), default='auto',
+                        help='auto: lirik tidak jelas menjadi logo; strict: berhenti jika ada baris tanpa anchor')
     args = parser.parse_args(argv)
     if args.folder is None:
         value = input('Folder berisi MP3, MP4, MD (bisa paste path): ').strip()

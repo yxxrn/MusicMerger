@@ -1,5 +1,6 @@
 """User-facing CLI and isolated output workflow regression tests."""
 import contextlib
+import copy
 import io
 import json
 import tempfile
@@ -252,6 +253,56 @@ class WorkflowTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 workflow.validate_timing(bad, [('verse', 'Hello world')], 'audio', 'lyrics', 10)
 
+    @staticmethod
+    def fallback_payload(omitted_index=4):
+        lines = SyncTests.fallback_lines()
+        omitted = dict(index=omitted_index, words_text=lines[omitted_index]['words_text'],
+                       reason='unsupported_after_retry', evidence=[
+                           dict(model=model, matched_words=0, total_words=5) for model in ('small', 'medium')])
+        start = lines[omitted_index-1]['wend'] if omitted_index else 0
+        end = lines[omitted_index+1]['wstart'] if omitted_index+1 < len(lines) else 40
+        return dict(schema=2, method='wav2vec2_ctc_forced_alignment', audio_sha256='audio',
+                    lyrics_sha256='lyrics', coverage=[0, 40], source_line_count=5,
+                    source_words=[x['words_text'] for x in lines],
+                    policy=dict(version=1, min_line_support=.8, min_retained_tokens=.75),
+                    lines=[dict(index=i, words_text=x['words_text'], words=x['words'], scores=[.9]*5)
+                           for i, x in enumerate(lines) if i != omitted_index],
+                    omitted_lines=[omitted], omission_windows=[[start, end]])
+
+    def test_schema_two_partition_preserves_omitted_and_repeated_source_indices(self):
+        lyrics = [('verse', x['text']) for x in SyncTests.fallback_lines()]
+        for index in (0, 2, 4):
+            with self.subTest(index=index):
+                payload = self.fallback_payload(index)
+                rows = workflow.validate_timing(payload, lyrics, 'audio', 'lyrics', 40)
+                self.assertEqual(len(rows), 5)
+                self.assertIsNone(rows[index]['wstart'])
+                self.assertEqual(rows[index]['words'], [])
+                if index < 4:
+                    self.assertEqual(rows[index+1]['wstart'], 2+7*(index+1))
+                with self.assertRaises(ValueError):
+                    workflow.validate_timing(payload, lyrics, 'audio', 'lyrics', 40, lyric_policy='strict')
+
+    def test_schema_two_rejects_incomplete_corrupt_or_overlapping_omissions(self):
+        lyrics = [('verse', x['text']) for x in SyncTests.fallback_lines()]
+        mutations = [lambda p: p['lines'].pop(),
+                     lambda p: p['omitted_lines'].append(copy.deepcopy(p['omitted_lines'][0])),
+                     lambda p: p['omitted_lines'][0].update(index=True),
+                     lambda p: p['omitted_lines'][0].update(reason='guess'),
+                     lambda p: p['omitted_lines'][0].update(evidence=[]),
+                     lambda p: p['omitted_lines'][0].update(words=[[1, 2]]),
+                     lambda p: p.update(omission_windows=[[0, 40]]),
+                     lambda p: p.update(source_words=[]),
+                     lambda p: p.update(coverage=[0, 39]),
+                     lambda p: p['lines'][0].update(words=[[float('nan'), 3]]*5),
+                     lambda p: p.update(policy=dict(version=9)),
+                     lambda p: p['policy'].update(version=True),
+                     lambda p: p.update(audio_sha256='wrong')]
+        for mutate in mutations:
+            payload = self.fallback_payload(); mutate(payload)
+            with self.subTest(payload=payload), self.assertRaises(ValueError):
+                workflow.validate_timing(payload, lyrics, 'audio', 'lyrics', 40)
+
     def test_reusable_timing_rejects_lyric_mismatch_and_overlap(self):
         with self.assertRaises(ValueError):
             workflow.validate_timing(self.payload(), [('verse', 'Different words')], 'audio', 'lyrics', 10)
@@ -289,6 +340,34 @@ class WorkflowTests(unittest.TestCase):
                                      subtitles_only=True, instrumental_icon=False, palette='cyan')
             self.assertIn('Hello', ass.read_text(encoding='utf-8'))
             self.assertEqual(original.read_text(), 'not a trusted cache')
+
+    def test_schema_two_renderer_never_realigns_skipped_repeated_words_as_asr(self):
+        from musicmerger import renderer as karaoke
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); folder = root/'song'; folder.mkdir()
+            (folder/'v.mp4').write_bytes(b'video')
+            audio = folder/'a.mp3'; audio.write_bytes(b'audio')
+            md = folder/'lyrics.md'; md.write_text('\n'.join(x['text'] for x in SyncTests.fallback_lines()))
+            payload = self.fallback_payload(2)
+            payload.update(audio_sha256=karaoke.audio_fingerprint(audio)['sha256'],
+                           lyrics_sha256=karaoke.audio_fingerprint(md)['sha256'])
+            timing = root/'timing.json'; timing.write_text(json.dumps(payload))
+            info = dict(streams=[dict(codec_type='video', width=640, height=360, avg_frame_rate='24')],
+                        format=dict(duration='3'))
+            with mock.patch.object(karaoke, 'probe', return_value=info), \
+                    mock.patch.object(karaoke, 'ffprobe_duration', return_value=40), \
+                    mock.patch.object(karaoke, 'whisper_words', side_effect=AssertionError('No ASR rematching')):
+                ass = karaoke.render(folder, root/'support', timing_file=timing,
+                                     subtitles_only=True, palette='cyan')
+            report = json.loads((ass.parent/'song.alignment.json').read_text())
+            self.assertIsNone(report['lines'][2]['wstart'])
+            self.assertEqual(report['lines'][3]['wstart'], 23)
+            windows = report['lyric_fallback']['display_windows']
+            self.assertEqual(len(windows), 1)
+            self.assertGreaterEqual(windows[0][0], 11.7)
+            self.assertLessEqual(windows[0][1], 22.88)
+            self.assertEqual(report['style']['equalizer']['hidden_windows'], windows)
+            self.assertEqual(md.read_text().splitlines(), [x['text'] for x in SyncTests.fallback_lines()])
 
     def test_find_timing_ignores_wrong_identity_and_prefers_song_cache(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -397,6 +476,85 @@ class WorkflowTests(unittest.TestCase):
 
 
 class SyncTests(unittest.TestCase):
+    def test_asr_cache_reuse_checks_identity_language_and_keeps_source_untouched(self):
+        from musicmerger.sync import reuse_asr_cache
+        from musicmerger import renderer as karaoke
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); audio = root/'a.mp3'; audio.write_bytes(b'audio')
+            old = root/'old/support/asr-cache.json'; old.parent.mkdir(parents=True)
+            new = root/'new/support/asr-cache.json'; new.parent.mkdir(parents=True)
+            data = dict(schema=2, audio=karaoke.audio_fingerprint(audio), model='small', language='auto',
+                        words=[dict(w='hello', start=1, end=2)])
+            old.write_text(json.dumps(data)); original = old.read_bytes()
+            with mock.patch.object(karaoke, 'whisper_words', side_effect=AssertionError('Cache lookup must not run ASR')):
+                self.assertFalse(reuse_asr_cache(audio, new, language='en'))
+                self.assertTrue(reuse_asr_cache(audio, new, language='auto'))
+            self.assertEqual(new.read_bytes(), original)
+            self.assertEqual(old.read_bytes(), original)
+
+    @staticmethod
+    def fallback_lines():
+        return [dict(label='verse', text='these are five clear words',
+                     words_text=['these', 'are', 'five', 'clear', 'words'], nwords=5,
+                     wstart=2 + 7*i, wend=4 + 7*i,
+                     words=[[(2+7*i+j*.4)*1000, (2+7*i+(j+1)*.4)*1000] for j in range(5)],
+                     matched_words=5, estimated_words=0, provenance=['exact']*5,
+                     issues=[], needs_review=False) for i in range(5)]
+
+    def test_second_model_rescues_weak_first_model_without_mutating_source(self):
+        from musicmerger.fallback import select_lines
+        small = self.fallback_lines(); medium = copy.deepcopy(small)
+        small[0].update(matched_words=2, estimated_words=3)
+        original = copy.deepcopy(small)
+        chosen, omitted = select_lines(small, medium, 40)
+        self.assertEqual(chosen[0]['matched_words'], 5)
+        self.assertEqual(omitted, [])
+        self.assertEqual(small, original)
+
+    def test_rescued_line_uses_compatible_neighbor_model_without_clipping_times(self):
+        from musicmerger.fallback import select_lines
+        small = self.fallback_lines(); medium = copy.deepcopy(small)
+        small[0].update(matched_words=2, estimated_words=3)
+        medium[0]['wend'] = 4.2
+        small[1]['wstart'] = 4.1
+        medium[1]['wstart'] = 4.2
+        chosen, omitted = select_lines(small, medium, 40)
+        self.assertEqual(omitted, [])
+        self.assertEqual(chosen[1], medium[1])
+        self.assertEqual(chosen[0]['wend'], 4.2)
+
+    def test_local_weak_or_missing_section_keeps_original_indices_and_later_times(self):
+        from musicmerger.fallback import select_lines
+        for index in (0, 2, 4):
+            with self.subTest(index=index):
+                small = self.fallback_lines(); medium = copy.deepcopy(small)
+                small[index].update(matched_words=0, wstart=None, wend=None, words=[])
+                medium[index].update(matched_words=3, estimated_words=2)
+                selected, omitted = select_lines(small, medium, 40)
+                self.assertEqual([r['index'] for r in omitted], [index])
+                self.assertIsNone(selected[index]['wstart'])
+                for i in set(range(5)) - {index}:
+                    self.assertEqual(selected[i]['wstart'], small[i]['wstart'])
+
+    def test_mostly_wrong_lyrics_and_unresolvable_chronology_still_stop(self):
+        from musicmerger.fallback import select_lines
+        lines = self.fallback_lines()
+        for row in lines[-2:]:
+            row.update(matched_words=0, wstart=None, wend=None, words=[])
+        with self.assertRaisesRegex(ValueError, '75%'):
+            select_lines(lines, copy.deepcopy(lines), 40)
+        lines = self.fallback_lines(); lines[2]['wstart'] = 1
+        with self.assertRaises(ValueError):
+            select_lines(lines, copy.deepcopy(lines), 40)
+
+    def test_strict_policy_rejects_missing_lines_and_cli_exposes_policy(self):
+        from musicmerger.fallback import select_lines
+        lines = self.fallback_lines(); lines[-1]['wstart'] = None
+        with self.assertRaises(ValueError):
+            select_lines(lines, copy.deepcopy(lines), 40, policy='strict')
+        self.assertEqual(musicmerger.options(['D:/song', '--mode', 'full']).lyric_policy, 'auto')
+        self.assertEqual(musicmerger.options(['D:/song', '--mode', 'full', '--lyric-policy', 'strict']).lyric_policy, 'strict')
+
     def test_ctc_supports_lowercase_vocabularies(self):
         from musicmerger.acoustic import ctc_word_spans
         spans = ctc_word_spans([[-10, -10, 0], [0, -10, -10]], ['A'], {'|': 1, 'a': 2}, 0)

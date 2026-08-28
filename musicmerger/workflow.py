@@ -34,7 +34,7 @@ def reserve_run(folder, mode, stamp=None):
     raise ValueError('Nama output habis; gunakan folder baru')
 
 
-def validate_timing(payload, lyrics, audio_hash, lyrics_hash, duration):
+def validate_timing(payload, lyrics, audio_hash, lyrics_hash, duration, *, lyric_policy='auto'):
     baseline = []
     for label, text in lyrics:
         words = karaoke.WORD_RE.findall(text)
@@ -42,7 +42,7 @@ def validate_timing(payload, lyrics, audio_hash, lyrics_hash, duration):
                              wstart=0, wend=.001, words=[], issues=[], needs_review=True))
     return apply_timing_override(baseline, payload, audio_sha256=audio_hash,
                                  lyrics_sha256=lyrics_hash, start=0,
-                                 duration=duration, song_duration=duration)
+                                 duration=duration, song_duration=duration, lyric_policy=lyric_policy)
 
 
 def write_render_cache(path, audio, payload, language):
@@ -56,14 +56,14 @@ def write_render_cache(path, audio, payload, language):
         json.dump(data, stream, ensure_ascii=False, indent=2)
 
 
-def find_timing(folder, lyrics, audio_hash, lyrics_hash, duration, *, candidates=None):
+def find_timing(folder, lyrics, audio_hash, lyrics_hash, duration, *, candidates=None, lyric_policy='auto'):
     if candidates is None:
         candidates = [*sorted((folder / 'MusicMerger-output/cache').glob('timing-*.json'), reverse=True),
                       *sorted((ROOT / 'outputs').glob('timing-acoustic-full-*.json'), reverse=True)]
     for path in candidates:
         try:
             payload = json.loads(path.read_text(encoding='utf-8-sig'))
-            validate_timing(payload, lyrics, audio_hash, lyrics_hash, duration)
+            validate_timing(payload, lyrics, audio_hash, lyrics_hash, duration, lyric_policy=lyric_policy)
             return path
         except (OSError, ValueError, TypeError, KeyError, AttributeError):
             continue
@@ -91,9 +91,9 @@ def run(args):
     if selected is not None:
         selected = selected.resolve()
         validate_timing(json.loads(selected.read_text(encoding='utf-8-sig')), lyrics,
-                        audio_hash, lyrics_hash, duration)
+                        audio_hash, lyrics_hash, duration, lyric_policy=args.lyric_policy)
     else:
-        selected = find_timing(folder, lyrics, audio_hash, lyrics_hash, duration)
+        selected = find_timing(folder, lyrics, audio_hash, lyrics_hash, duration, lyric_policy=args.lyric_policy)
     job = reserve_run(folder, args.mode)
     state = dict(status='running', folder=str(folder), mode=args.mode,
                  audio_sha256=audio_hash, lyrics_sha256=lyrics_hash)
@@ -110,12 +110,18 @@ def run(args):
         else:
             print('[1/3] Sinkronisasi otomatis. Proses pertama bisa lama; model Whisper mungkin diunduh.', flush=True)
             command = [sys.executable, '-B', '-m', 'musicmerger.sync', str(folder), str(job),
-                       '--language', args.language, '--vocals', args.vocals]
+                       '--language', args.language, '--vocals', args.vocals,
+                       '--lyric-policy', args.lyric_policy]
             if args.align_model:
                 command += ['--align-model', str(args.align_model.resolve())]
             run_command(command, job / 'support/synchronization.log')
         payload = json.loads(timing.read_text(encoding='utf-8-sig'))
-        validate_timing(payload, lyrics, audio_hash, lyrics_hash, duration)
+        validate_timing(payload, lyrics, audio_hash, lyrics_hash, duration, lyric_policy=args.lyric_policy)
+        omissions = payload.get('omitted_lines', [])
+        if omissions:
+            numbers = [x['index'] + 1 for x in omissions]
+            print(f'PERINGATAN: lirik {numbers} tidak ditampilkan; bagian terkait memakai logo.', flush=True)
+            checkpoint('timing', omitted_lyric_lines=numbers, omission_windows=payload['omission_windows'])
         language = payload.get('language') or 'en'
         cache = job / 'support/render-cache.json'
         write_render_cache(cache, audio, payload, language)
@@ -133,7 +139,8 @@ def run(args):
         command = [sys.executable, '-B', '-m', 'musicmerger.renderer', str(folder),
                    '--out', str(job / 'support'), '--timing-file', str(timing),
                    '--cache-file', str(cache), '--language', language,
-                   '--allow-estimated-timing', '--encoder', args.encoder]
+                   '--allow-estimated-timing', '--encoder', args.encoder,
+                   '--lyric-policy', args.lyric_policy]
         target_seconds = duration
         if args.mode == 'preview':
             target_seconds = min(args.duration, duration - args.start)
