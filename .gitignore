@@ -21,6 +21,7 @@ HASIL/
 # Private/local working notes and verification snapshots; publish only the guide
 /docs/*
 !/docs/DEVELOPMENT.md
+!/docs/BATCH.md
 
 # User-supplied font/logo are retained locally, not redistributed by default
 /assets/fonts/*

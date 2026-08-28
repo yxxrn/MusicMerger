@@ -131,6 +131,23 @@ python -B -m unittest discover -s tests -p test_project_layout.py -q
 - `tests/test_thumbnail.py` membuat font sintetis untuk unit/integration test,
   tanpa mengharuskan file font pengguna. Uji visual tetap perlu font nyata.
 
+## Pemulihan batch dan konflik batas ASR
+
+Operator `python -B -m musicmerger.batch` menyediakan `run`, `status`, dan
+`resume`; lihat [BATCH.md](BATCH.md) untuk checkpoint, proses terpisah, dan
+verifikasi sebelum melewati hasil yang sudah lengkap. Tidak ada scheduler
+boot otomatis. Hasil gagal perlu ditinjau sebelum `resume --retry-failed`.
+
+Jika kandidat ASR yang didukung bertabrakan pada batas dua baris berurutan,
+`sync` mencoba CTC lokal pada jendela maksimal 30 detik, overlap maksimal
+1 detik, dan perubahan batas maksimal 2 detik. Kata dan indeks MD tidak diubah,
+timestamp tidak dipotong atau digeser untuk memaksakan urutan. Kandidat harus
+memenuhi dukungan ASR yang sama serta pemeriksaan score dan rentang CTC.
+Konflik yang melewati omission, urutan terbalik, atau bukti yang lemah tetap
+berhenti. `reference-repaired.json` dan `boundary-repair.log` menyimpan bukti;
+alignment penuh dan validator timing akhir tetap wajib. Score CTC bukan
+persentase akurasi; hasil koreksi tetap ditandai perlu review audio.
+
 ## Cakupan publik dan data lokal
 
 `.gitignore` memisahkan source/test/dokumentasi publik dari `inputs`, `outputs`,

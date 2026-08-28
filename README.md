@@ -10,6 +10,7 @@ CLI lokal untuk menggabungkan satu video MP4, musik MP3, dan lirik Markdown menj
 - Video latar diulang dengan crossfade pada sambungan.
 - Encode GPU otomatis dengan fallback CPU.
 - Timing otomatis, reuse berdasarkan identitas audio/lirik, dan retry terbatas.
+- Batch dengan checkpoint, proses terpisah, resume dan skip hasil terverifikasi.
 - Final terbaru langsung terlihat di `HASIL/`; versi sebelumnya masuk riwayat.
 - MP4 terpisah dari subtitle/log; bahan asli tidak ditimpa.
 - Thumbnail otomatis: frame video asli, judul tengah, font sesuai genre/mood,
@@ -23,12 +24,16 @@ MusicMerger/
     __main__.py                python -m musicmerger
     cli.py                     Menu terminal
     workflow.py                Alur pekerjaan
+    batch.py                   Operator batch run/status/resume
+    batch_process.py           Kepemilikan proses dan lock OS
+    batch_verify.py            Verifikasi sumber dan paket final
     publication.py             HASIL dan riwayat final
     thumbnail.py               Pemilihan font/frame, layout dan JPEG thumbnail
     thumbnail_palette.py       Warna dominan, harmoni dan kontras teks terang/gelap
     thumbnail-fonts.json       Katalog karakter font (tanpa file font)
     sync.py                    Persiapan timing otomatis
     fallback.py                Pemilihan lirik dan catatan bagian yang dilewati
+    boundary_repair.py          Koreksi CTC lokal untuk konflik batas ASR
     renderer.py                Renderer dan CLI lanjutan
     acoustic.py, timing.py      Alignment lirik
     encoder.py, loop.py         Encoding dan video loop
@@ -117,6 +122,25 @@ python -B -m musicmerger 'D:\Folder Lagu' --mode thumbnail
 Opsi tambahan: `--encoder cpu`, `--language en`, `--width 640` (preview), `--timing-file <file.json>`, `--vocals off`, `--lyric-policy strict`. Lihat `python -B -m musicmerger --help`.
 
 CLI renderer lama kini diakses dengan `python -B -m musicmerger.renderer --help`. Jangan menjalankan file di dalam paket secara langsung; gunakan `-m` agar import dan worker tetap benar.
+
+### Batch yang dapat dilanjutkan
+
+Siapkan `youtube-metadata.json` yang cocok dengan MD di setiap folder. Dari root
+proyek, pilih nomor folder secara eksplisit dan gunakan direktori job baru:
+
+```powershell
+python -B -m musicmerger.batch run 'D:\asmr video' --folders 12,20,35 --job 'archive\batch-baru' --detach
+python -B -m musicmerger.batch status 'archive\batch-baru'
+python -B -m musicmerger.batch resume 'archive\batch-baru' --detach
+```
+
+Parent direktori job harus sudah ada. `--detach` menjalankan operator tersembunyi
+di luar terminal pemanggil. Setelah restart komputer, jalankan `resume` secara
+eksplisit; tidak ada scheduler otomatis. Hasil lengkap diverifikasi sebelum
+dilewati, termasuk decode penuh. Kegagalan tercatat tidak dicoba ulang kecuali
+memakai `--retry-failed` setelah penyebabnya diperbaiki. Model lokal harus sudah
+tersedia karena batch berjalan offline. Lihat [panduan batch](docs/BATCH.md)
+untuk batasan, proses aktif, dan pemulihan yang aman.
 
 ### Thumbnail otomatis
 
