@@ -1,3 +1,5 @@
 # Versi dependensi langsung yang terpasang saat audit lokal 2026-08-27.
 # Ini bukan lockfile lengkap. FFmpeg dan ffprobe dipasang terpisah.
 faster-whisper==1.2.1
+Pillow>=10.2,<14
+fonttools>=4.50,<5

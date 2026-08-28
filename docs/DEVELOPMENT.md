@@ -7,6 +7,7 @@
 | `musicmerger/__main__.py`, `cli.py` | Entry point, menu, argumen, pembatalan |
 | `workflow.py` | Validasi input, reuse timing, run unik |
 | `publication.py` | Publikasi HASIL, manifest kepemilikan, pengarsipan versi sebelumnya |
+| `thumbnail.py`, `thumbnail-fonts.json` | Metadata, font lokal, pemilihan frame, layout glyph, palet/kontras JPEG |
 | `sync.py` | Transkripsi, pemilihan model bahasa, orkestrasi alignment |
 | `fallback.py` | Seleksi lirik, partisi indeks asli, validasi omission dan batas interval |
 | `process.py` | Subprocess, log, progres, penutupan proses turunannya |
@@ -77,6 +78,36 @@ python -B -m unittest discover -s tests -p test_project_layout.py -q
   atau menambahkan timestamp palsu agar validasi lolos.
 - Preview tetap disarankan: omission berarti tidak didukung pemeriksaan otomatis,
   bukan bukti bahwa baris tersebut tidak dinyanyikan.
+
+## Kontrak thumbnail
+
+- CLI `full` menghasilkan sidecar sebelum ASR; `publish(..., attachments=...)`
+  mempublikasikan video dan sidecar di bawah satu lock. Kegagalan publikasi video
+  mengembalikan JPEG/TXT/manifest sebelumnya melalui context manager `_extras`.
+- `thumbnail` memakai `publish_thumbnail` tanpa menyentuh MP4/timing; tidak
+  membutuhkan Mirage, logo, Whisper atau CTC. `preview` tetap tanpa thumbnail.
+- Metadata wajib cocok nama/hash MD. Semua input termasuk JSON/font difingerprint
+  sebelum/sesudah generasi. Tidak ada title generator atau perubahan MD otomatis.
+- Default font dir relatif terhadap `paths.ROOT`, dapat dioverride `--font-dir`;
+  kode tidak memuat path runtime pengguna atau dependensi Codex/Chrome.
+- Katalog lokal mengalahkan katalog bawaan. Gunakan cmap fontTools untuk menolak
+  kandidat yang tidak mendukung judul; Pillow menghitung bbox glyph dan origin
+  optis. Tidak ada substitusi karakter/pemotongan judul diam-diam.
+- `layout_title` mengukur kandidat 1–3 baris (maks. 30 kata) dalam area aman,
+  memberi bobot lebih besar pada baris akhir dan menghindari pemisahan buruk.
+- Palet harmonis terhadap warna rata-rata frame; mood energik hanya menaikkan
+  aksen. Soft shade di area teks diuji terhadap pixel paling terang dari sampel
+  tiap bbox (termasuk caption) untuk kontras >=4.5. Laporan bukan klaim kontras
+  setiap pixel setelah kompresi JPEG atau jaminan kualitas editorial.
+- Tiga kandidat frame 25/40/65% dipilih berdasarkan paparan/detail, mengutamakan
+  posisi 40% bila kualitas setara. Tidak ada model vision/audio dan tidak ada
+  pemahaman semantik objek dari skor tersebut.
+- `latest-thumbnail.json` memiliki schema 1, run dan `files` berupa hash JPEG/TXT.
+  Backup penggantian ada di support run baru. Tolak link/junction, collision,
+  dan hasil yang diedit. Crash/pemutusan paksa bisa menyisakan lock; jangan hapus
+  lock tanpa memeriksa status/files. Jangan klaim transaksi tahan power-loss.
+- `tests/test_thumbnail.py` membuat font sintetis untuk unit/integration test,
+  tanpa mengharuskan file font pengguna. Uji visual tetap perlu font nyata.
 
 ## Cakupan publik dan data lokal
 

@@ -27,6 +27,12 @@ class CliTests(unittest.TestCase):
             options = musicmerger.options(['D:\\song', '--mode', 'full'])
         self.assertEqual(options.mode, 'full')
 
+    def test_thumbnail_mode_and_font_directory_do_not_prompt(self):
+        with mock.patch('builtins.input', side_effect=AssertionError('Unexpected prompt')):
+            options = musicmerger.options(['D:/song', '--mode', 'thumbnail', '--font-dir', 'D:/fonts'])
+        self.assertEqual(options.font_dir, Path('D:/fonts'))
+        self.assertFalse(options.no_thumbnail)
+
     def test_invalid_menu_choice_is_retried(self):
         with mock.patch('builtins.input', side_effect=['bad', '2']):
             self.assertEqual(musicmerger.options(['D:\\song']).mode, 'full')
@@ -440,7 +446,7 @@ class WorkflowTests(unittest.TestCase):
             (folder / 'video.mp4').write_bytes(b'video')
             audio = folder / 'music.mp3'; audio.write_bytes(b'audio')
             lyrics = folder / 'lyrics.md'; lyrics.write_text('Hello world')
-            args = musicmerger.options([str(folder), '--mode', 'full'])
+            args = musicmerger.options([str(folder), '--mode', 'full', '--no-thumbnail'])
             def worker(command, log, **kwargs):
                 if command[3] == 'musicmerger.sync':
                     run = Path(command[5])
@@ -464,7 +470,7 @@ class WorkflowTests(unittest.TestCase):
             (folder / 'video.mp4').write_bytes(b'video')
             (folder / 'music.mp3').write_bytes(b'audio')
             (folder / 'lyrics.md').write_text('Hello world')
-            args = musicmerger.options([str(folder), '--mode', 'full'])
+            args = musicmerger.options([str(folder), '--mode', 'full', '--no-thumbnail'])
             with mock.patch.object(karaoke, 'ffprobe_duration', return_value=10), \
                     mock.patch('musicmerger.workflow.run_command', side_effect=RuntimeError('worker failed')):
                 with self.assertRaises(RuntimeError):

@@ -9,13 +9,13 @@ import sys
 from . import renderer as karaoke
 from .acoustic import apply_timing_override
 from .process import run_command
-from .publication import publish
+from .publication import publish, publish_thumbnail
 
 from .paths import ROOT
 
 
 def reserve_run(folder, mode, stamp=None):
-    if mode not in ('preview', 'full'):
+    if mode not in ('preview', 'full', 'thumbnail'):
         raise ValueError('Mode tidak valid')
     parent = folder / 'MusicMerger-output'
     if parent.is_symlink() or (parent.exists() and getattr(parent.lstat(), 'st_file_attributes', 0) & 0x400):
@@ -70,13 +70,41 @@ def find_timing(folder, lyrics, audio_hash, lyrics_hash, duration, *, candidates
     return None
 
 
+def make_thumbnail(args, folder, video, audio, md, job):
+    try:
+        from .thumbnail import generate
+    except ImportError as exc:
+        raise ValueError('Dependensi thumbnail belum tersedia; jalankan pip install -r requirements.txt.') from exc
+    print('Thumbnail: pilih font, frame, ukuran judul dan kontras otomatis.', flush=True)
+    return generate(folder, video, audio, md, job / 'support', font_dir=args.font_dir)
+
+
+def run_thumbnail(args, folder, video, audio, md):
+    job = reserve_run(folder, 'thumbnail')
+    state = dict(status='running', mode='thumbnail', folder=str(folder), stage='thumbnail')
+    status = job / 'status.json'
+    status.write_text(json.dumps(state, indent=2), encoding='utf-8')
+    try:
+        attachments = make_thumbnail(args, folder, video, audio, md, job)
+        result = publish_thumbnail(attachments, job)
+        state.update(status='complete', stage='done', output=str(result))
+        return result
+    except BaseException as exc:
+        state.update(status='cancelled' if isinstance(exc, KeyboardInterrupt) else 'failed', error=str(exc))
+        raise
+    finally:
+        status.write_text(json.dumps(state, indent=2), encoding='utf-8')
+
+
 def run(args):
     folder = args.folder.resolve()
-    _, audio, md = karaoke.input_files(folder)
-    lyrics = karaoke.parse_lyrics(md)
+    video, audio, md = karaoke.input_files(folder)
     for executable in ('ffmpeg', 'ffprobe'):
         if not shutil.which(executable):
             raise ValueError(f'{executable} belum ditemukan pada PATH; lihat README.')
+    if args.mode == 'thumbnail':
+        return run_thumbnail(args, folder, video, audio, md)
+    lyrics = karaoke.parse_lyrics(md)
     for asset in (karaoke.DEFAULT_FONT_FILE, karaoke.DEFAULT_LOGO_FILE):
         if not asset.is_file():
             raise ValueError(f'Aset wajib tidak ditemukan: {asset}')
@@ -102,6 +130,10 @@ def run(args):
         (job / 'status.json').write_text(json.dumps(state, indent=2), encoding='utf-8')
     print(f'Folder hasil: {job}', flush=True)
     try:
+        attachments = None
+        if args.mode == 'full' and not args.no_thumbnail:
+            checkpoint('thumbnail')
+            attachments = make_thumbnail(args, folder, video, audio, md, job)
         checkpoint('timing')
         timing = job / 'timing/timing.json'
         if selected:
@@ -148,8 +180,10 @@ def run(args):
         run_command(command, job / 'support/render-console.log',
                     watch_log=job / 'support' / f'{folder.name}.ffmpeg.log', target_seconds=target_seconds)
         print('[3/3] Pisahkan MP4 selesai dari subtitle dan file pendukung.', flush=True)
-        result = publish(job / 'support' / f'{folder.name}.mp4', job, args.mode, song_name=audio.stem)
-        checkpoint('done', status='complete', output=str(result))
+        result = publish(job / 'support' / f'{folder.name}.mp4', job, args.mode, song_name=audio.stem,
+                         attachments=attachments)
+        checkpoint('done', status='complete', output=str(result),
+                   thumbnail=str(result.parent / 'thumbnail.jpg') if attachments else None)
         return result
     except BaseException as exc:
         checkpoint('stopped', status='cancelled' if isinstance(exc, KeyboardInterrupt) else 'failed',

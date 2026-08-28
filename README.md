@@ -4,7 +4,7 @@ CLI lokal untuk menggabungkan satu video MP4, musik MP3, dan lirik Markdown menj
 
 ## Fitur
 
-- Menu sederhana: pilih folder, lalu Preview atau Render penuh.
+- Menu sederhana: pilih folder, lalu Preview, Render penuh + thumbnail, atau Thumbnail saja.
 - Frasa lirik besar di tengah, sorotan per kata, hold/fade, font Mirage.
 - Logo musik saat jeda dan equalizer subtle.
 - Video latar diulang dengan crossfade pada sambungan.
@@ -12,6 +12,8 @@ CLI lokal untuk menggabungkan satu video MP4, musik MP3, dan lirik Markdown menj
 - Timing otomatis, reuse berdasarkan identitas audio/lirik, dan retry terbatas.
 - Final terbaru langsung terlihat di `HASIL/`; versi sebelumnya masuk riwayat.
 - MP4 terpisah dari subtitle/log; bahan asli tidak ditimpa.
+- Thumbnail otomatis: frame video asli, judul tengah, font sesuai genre/mood,
+  warna kalem dan kontras terukur; tersedia juga mode thumbnail saja.
 
 ## Struktur repository
 
@@ -22,6 +24,8 @@ MusicMerger/
     cli.py                     Menu terminal
     workflow.py                Alur pekerjaan
     publication.py             HASIL dan riwayat final
+    thumbnail.py               Pemilihan font/frame, layout dan JPEG thumbnail
+    thumbnail-fonts.json       Katalog karakter font (tanpa file font)
     sync.py                    Persiapan timing otomatis
     fallback.py                Pemilihan lirik dan catatan bagian yang dilewati
     renderer.py                Renderer dan CLI lanjutan
@@ -33,6 +37,7 @@ MusicMerger/
   assets/
     fonts/                     Font lokal, tidak dibundel
     images/                    Logo lokal, tidak dibundel
+  listfont/                    Koleksi font thumbnail dan katalog lokal (diabaikan Git)
   tests/                       Tes regresi
   docs/DEVELOPMENT.md           Panduan pengembangan
   MusicMerger.bat               Launcher Windows
@@ -44,6 +49,11 @@ MusicMerger/
 ```
 
 Folder `inputs/`, `outputs/`, `archive/`, `.models/`, dan catatan kerja lain boleh tetap ada secara lokal, tetapi tidak ikut GitHub.
+
+Simpan font karaoke dan font contoh di `assets/fonts/`; koleksi yang dipilih otomatis
+untuk thumbnail tetap di `listfont/`. Simpan eksperimen serta bukti pemeriksaan di
+`archive/`, bukan di root. Hasil siap unggah berada di `HASIL/` pada folder lagu;
+log, timing, dan riwayat proses berada di `MusicMerger-output/` pada folder yang sama.
 
 ## Persiapan
 
@@ -74,7 +84,9 @@ Model tidak masuk GitHub. Model Whisper dapat diunduh saat transkripsi pertama. 
 
 ## Cara menjalankan
 
-**Windows:** klik dua kali `MusicMerger.bat`, paste path folder lagu, lalu pilih **1 = Preview** atau **2 = Render penuh**. Folder boleh berada di luar repository.
+**Windows:** klik dua kali `MusicMerger.bat`, paste path folder lagu, lalu pilih
+**1 = Preview**, **2 = Render penuh + thumbnail**, atau **3 = Thumbnail saja**.
+Folder boleh berada di luar repository.
 
 Atau dari terminal di root proyek:
 
@@ -98,11 +110,66 @@ Tanpa menu:
 ```powershell
 python -B -m musicmerger 'D:\Folder Lagu' --mode preview --start 3 --duration 15
 python -B -m musicmerger 'D:\Folder Lagu' --mode full
+python -B -m musicmerger 'D:\Folder Lagu' --mode thumbnail
 ```
 
 Opsi tambahan: `--encoder cpu`, `--language en`, `--width 640` (preview), `--timing-file <file.json>`, `--vocals off`, `--lyric-policy strict`. Lihat `python -B -m musicmerger --help`.
 
 CLI renderer lama kini diakses dengan `python -B -m musicmerger.renderer --help`. Jangan menjalankan file di dalam paket secara langsung; gunakan `-m` agar import dan worker tetap benar.
+
+### Thumbnail otomatis
+
+Mode `full` pada CLI utama otomatis membuat thumbnail sebelum pekerjaan timing
+yang mahal, lalu mempublikasikannya bersama video setelah render berhasil.
+Mode `thumbnail` hanya membuat JPEG dan metadata upload; tidak menjalankan ASR,
+CTC, encode video atau mengubah MP4 yang sudah selesai. Mode `preview` dan CLI
+lanjutan `musicmerger.renderer` tidak membuat thumbnail.
+
+Siapkan `listfont/` di root checkout berisi font pilihan pengguna. Katalog bawaan
+mengenali Bogimber, Brant, Classica Bold Oblique, Dream Orphans Bold, Morris Roman
+Black, Rockdale, Yeseva One, dan ZT Otez. Tidak ada file font yang dibundel atau
+diunduh. Untuk katalog khusus, taruh `font-catalog.json` di folder font tersebut
+dengan `schema_version: 1` dan daftar `fonts` (field `file`, `family`,
+`genre_hints`, `mood_hints`). Setiap nama file harus berada langsung di folder itu.
+
+Folder lagu membutuhkan **youtube-metadata.json** yang sudah direview:
+
+```json
+{
+  "schema_version": 1,
+  "thumbnail_title": "Shape the Wood",
+  "youtube_title": "Shape the Wood | Roots Rock (Lyric Video)",
+  "tags": ["roots rock", "woodworking song"],
+  "source_md": "lirik.md",
+  "source_md_sha256": "isi dengan SHA256 file lirik.md yang direview"
+}
+```
+
+Dapatkan hash melalui `Get-FileHash -Algorithm SHA256 -LiteralPath 'lirik.md'`
+(simpan sebagai huruf kecil). Metadata yang hilang, tidak valid, atau berasal
+dari MD berbeda akan menghentikan proses dengan pesan koreksi; aplikasi tidak
+mengarang judul/tag atau mengubah lirik. Metadata yang telah dibuat sebelumnya
+dengan format ini dapat langsung dipakai.
+
+```powershell
+# Thumbnail saja, memakai koleksi font di lokasi lain (misalnya dari worktree)
+python -B -m musicmerger 'D:\Folder Lagu' --mode thumbnail --font-dir 'D:\Koleksi Font'
+# Tetap render video bila belum menyiapkan metadata/font thumbnail
+python -B -m musicmerger 'D:\Folder Lagu' --mode full --no-thumbnail
+```
+
+Pemilih font memakai genre/mood dari bagian **Style Prompt** MD dan tag yang
+disetujui, bukan menebak genre dari lirik atau mendengarkan audio dengan LLM.
+Klausa negatif seperti `no EDM` tidak dipakai sebagai rekomendasi genre. Semua
+karakter judul harus tersedia di font; tidak ada fallback sebagian huruf secara
+diam-diam. Ukuran dan pemisahan 1–3 baris dihitung dari batas glyph aktual.
+
+Hasil JPEG 1280×720 di bawah 2 MiB, tanpa bingkai/footer/panel. Warna aksen
+mengikuti warna frame, kalem untuk lagu tenang dan lebih cerah untuk mood energik.
+Foto digelapkan secara lembut di area teks hingga kontras sampel minimum 4.5:1.
+Ini tidak harus identik dengan palet karaoke dan tidak mengubah style video.
+Pemilihan font/genre dan pemisahan judul bersifat heuristik; tetap review hasilnya.
+Tidak membutuhkan Chrome, Node, layanan berbayar, atau model AI tambahan.
 
 ## Output
 
@@ -137,8 +204,11 @@ tidak membuat keputusan omission baru hanya dari cache ASR.
 LaguSaya/
   HASIL/
     musik-final.mp4               Final terbaru, nama mengikuti MP3
+    thumbnail.jpg                Thumbnail terakhir (full/thumbnail)
+    youtube-upload.txt           Judul dan tags, siap salin ke YouTube
   MusicMerger-output/
     latest-final.json            Identitas hasil yang dikelola aplikasi
+    latest-thumbnail.json        Identitas JPEG dan metadata upload
     cache/                       Timing yang dapat dipakai ulang
     <tanggal>-preview-001/
       preview/LaguSaya.mp4        Preview tidak mengganti final
@@ -150,6 +220,10 @@ LaguSaya/
       timing/
       support/
       status.json                Menunjuk lokasi MP4 run tersebut
+    <tanggal>-thumbnail-001/
+      support/                   Frame, laporan pilihan font/kontras, JPEG sumber
+        previous-thumbnail/      Backup sidecar sebelumnya bila diganti
+      status.json
 ```
 
 Untuk render penuh, cukup buka **HASIL** di folder lagu. Setelah render baru berhasil,
@@ -157,7 +231,16 @@ final sebelumnya dipindahkan ke `final/` pada run asalnya, lalu hasil baru mengg
 di HASIL. Tidak ada salinan video tambahan atau penghapusan riwayat otomatis.
 Preview tetap berada di run masing-masing dan tidak mengubah final terbaru.
 
-Lokasi MP4 dan folder hasil ditampilkan setelah **SELESAI**. Upload MP4 saja.
+Lokasi hasil ditampilkan setelah **SELESAI**. Upload MP4 sebagai video, pilih
+`thumbnail.jpg` pada kolom thumbnail, dan salin judul/tag dari `youtube-upload.txt`.
+Metadata JSON, laporan dan font tidak perlu diunggah.
+
+Penggantian thumbnail memakai lock publikasi yang sama dengan video. File hasil
+yang telah diedit pengguna atau file tak dikenal tidak ditimpa; metadata TXT lama
+tanpa manifest hanya dapat diadopsi bila byte-identik dengan hasil baru. Backup
+sidecar lama disimpan di `support/previous-thumbnail` pada run penggantinya.
+Error publikasi normal memulihkan hasil sebelumnya. `--no-thumbnail` tidak
+mengganti thumbnail lama; periksa kecocokannya sebelum upload video baru.
 Ctrl+C membatalkan proses; file parsial tetap di support dan tidak mengganti final.
 File yang bertabrakan namanya tetapi tidak tercatat sebagai milik aplikasi, atau final
 yang telah diedit pengguna, tidak ditimpa. Simpan file pribadi di luar HASIL.

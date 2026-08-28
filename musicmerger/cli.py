@@ -12,7 +12,9 @@ def folder_path(value):
 def options(argv=None):
     parser = argparse.ArgumentParser(description='MusicMerger: pilih folder MP3 + MP4 + MD, lalu render.')
     parser.add_argument('folder', nargs='?', type=folder_path)
-    parser.add_argument('--mode', choices=('preview', 'full'))
+    parser.add_argument('--mode', choices=('preview', 'full', 'thumbnail'))
+    parser.add_argument('--font-dir', type=Path, help='koleksi font thumbnail; default listfont di root aplikasi')
+    parser.add_argument('--no-thumbnail', action='store_true', help='full render tanpa membuat thumbnail')
     parser.add_argument('--start', type=float)
     parser.add_argument('--duration', type=float)
     parser.add_argument('--width', type=int, default=1280, help='lebar preview (default 1280)')
@@ -31,10 +33,10 @@ def options(argv=None):
         args.folder = folder_path(value)
     interactive = args.mode is None
     while args.mode is None:
-        choice = input('1. Preview (20 detik)   2. Render penuh   [1]: ').strip() or '1'
-        args.mode = {'1': 'preview', '2': 'full'}.get(choice)
+        choice = input('1. Preview (20 detik)   2. Render penuh + thumbnail   3. Thumbnail saja   [1]: ').strip() or '1'
+        args.mode = {'1': 'preview', '2': 'full', '3': 'thumbnail'}.get(choice)
         if args.mode is None:
-            print('Pilih 1 atau 2.')
+            print('Pilih 1, 2 atau 3.')
     if interactive and args.mode == 'preview':
         try:
             if args.start is None:
@@ -49,6 +51,8 @@ def options(argv=None):
         parser.error('Waktu harus finite; mulai >= 0 dan durasi > 0.')
     if args.width < 16 or args.width % 2:
         parser.error('Lebar preview harus genap, minimal 16.')
+    if args.mode == 'thumbnail' and args.no_thumbnail:
+        parser.error('--no-thumbnail tidak berlaku untuk mode thumbnail.')
     return args
 
 
@@ -61,7 +65,8 @@ def main(argv=None):
         from .workflow import run
         result = run(args)
         print(f'\nSELESAI: {result}\nBuka folder hasil: {result.parent}\n'
-              'Upload MP4 saja. File pendukung tetap di MusicMerger-output.')
+              'Pilih MP4 untuk video, thumbnail.jpg untuk thumbnail; judul/tag ada di youtube-upload.txt bila dibuat.\n'
+              'File pendukung tetap di MusicMerger-output.')
         return 0
     except (KeyboardInterrupt, EOFError):
         print('\nDibatalkan. Hasil parsial dipertahankan, bukan video final.')

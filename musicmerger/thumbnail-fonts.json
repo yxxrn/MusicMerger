@@ -1,0 +1,147 @@
+{
+  "schema_version": 1,
+  "fonts": [
+    {
+      "file": "Bogimber.otf",
+      "family": "Bogimber",
+      "subfamily": "Regular",
+      "group": "Serif tebal hangat",
+      "genre_hints": [
+        "roots rock",
+        "blues",
+        "country",
+        "folk"
+      ],
+      "mood_hints": [
+        "hangat",
+        "rustik",
+        "bersahaja"
+      ],
+      "usage_notes": "Pilihan utama judul pendek yang perlu tegas; bentuk lebar, ukur sebelum memakai judul panjang."
+    },
+    {
+      "file": "Brant-FREE.otf",
+      "family": "Brant",
+      "subfamily": "FREE",
+      "group": "Serif klasik elegan",
+      "genre_hints": [
+        "jazz",
+        "soul",
+        "acoustic",
+        "ballad"
+      ],
+      "mood_hints": [
+        "elegan",
+        "lembut",
+        "nostalgia"
+      ],
+      "usage_notes": "Cocok untuk lagu tenang; jaga ukuran agar detail serif tetap terlihat."
+    },
+    {
+      "file": "Classica-BoldOblique.ttf",
+      "family": "Classica",
+      "subfamily": "Bold Oblique",
+      "group": "Sans tebal miring",
+      "genre_hints": [
+        "rock",
+        "pop rock",
+        "upbeat pop"
+      ],
+      "mood_hints": [
+        "energik",
+        "bergerak",
+        "optimistis"
+      ],
+      "usage_notes": "Kemiringan memberi gerak; periksa batas optis huruf di kanan saat centering."
+    },
+    {
+      "file": "Dream Orphans Bd.otf",
+      "family": "Dream Orphans",
+      "subfamily": "Bold",
+      "group": "Sans ramping tegas",
+      "genre_hints": [
+        "indie rock",
+        "alternative",
+        "pop"
+      ],
+      "mood_hints": [
+        "modern",
+        "tegas",
+        "urban"
+      ],
+      "usage_notes": "Pilihan awal untuk judul lebih panjang karena bentuknya ramping; tetap ukur hasil render."
+    },
+    {
+      "file": "MorrisRomanBlack.otf",
+      "family": "Morris Roman",
+      "subfamily": "Black",
+      "group": "Dekoratif bernuansa manuskrip",
+      "genre_hints": [
+        "fantasy folk",
+        "medieval",
+        "celtic",
+        "cinematic fantasy"
+      ],
+      "mood_hints": [
+        "mistis",
+        "dongeng",
+        "historis"
+      ],
+      "usage_notes": "Gunakan selektif untuk judul pendek; hindari sebagai default lintas genre karena detailnya padat."
+    },
+    {
+      "file": "Rockdale-FREE.otf",
+      "family": "Rockdale",
+      "subfamily": "FREE",
+      "group": "Serif editorial klasik",
+      "genre_hints": [
+        "soul",
+        "jazz",
+        "acoustic pop",
+        "soft rock"
+      ],
+      "mood_hints": [
+        "dewasa",
+        "klasik",
+        "tenang"
+      ],
+      "usage_notes": "Bentuk kokoh dengan kontras goresan; cocok judul pendek sampai sedang."
+    },
+    {
+      "file": "YesevaOne-Regular.ttf",
+      "family": "Yeseva One",
+      "subfamily": "Regular",
+      "group": "Serif display ekspresif",
+      "genre_hints": [
+        "folk",
+        "jazz",
+        "romantic ballad",
+        "acoustic"
+      ],
+      "mood_hints": [
+        "hangat",
+        "romantis",
+        "artistik"
+      ],
+      "usage_notes": "Pilihan untuk lagu lembut dengan judul kuat; lebar huruf perlu diperhitungkan."
+    },
+    {
+      "file": "ZTOtez-Regular.ttf",
+      "family": "ZT Otez",
+      "subfamily": "Regular",
+      "group": "Serif klasik kokoh",
+      "genre_hints": [
+        "country",
+        "blues",
+        "roots rock",
+        "storytelling folk"
+      ],
+      "mood_hints": [
+        "nostalgia",
+        "rustik",
+        "membumi"
+      ],
+      "usage_notes": "Alternatif Bogimber untuk kesan klasik yang lebih tenang; cocok judul pendek sampai sedang."
+    }
+  ]
+}

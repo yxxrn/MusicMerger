@@ -27,6 +27,8 @@ HASIL/
 !/assets/fonts/.gitkeep
 /assets/images/*
 !/assets/images/.gitkeep
+/listfont/
+/GentleHearts-Regular.otf
 
 # Python/runtime/editor state
 __pycache__/
