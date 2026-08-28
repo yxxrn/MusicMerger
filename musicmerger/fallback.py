@@ -12,6 +12,15 @@ POLICIES = ('auto', 'strict')
 POLICY = {'version': 1, 'min_line_support': .8, 'min_retained_tokens': .75}
 
 
+class ChronologyConflict(ValueError):
+    """Supported ASR candidates still conflict; not acceptable render timing."""
+
+    def __init__(self, lines, omitted):
+        super().__init__('Kronologi lirik tidak pasti; fallback tidak boleh menebak timing')
+        self.lines = copy.deepcopy(lines)
+        self.omitted = copy.deepcopy(omitted)
+
+
 def baseline_lines(lyrics):
     return [dict(label=label, text=text, words_text=WORD_RE.findall(text),
                  nwords=len(WORD_RE.findall(text)), wstart=0, wend=.001,
@@ -80,7 +89,12 @@ def select_lines(small, medium, song_duration, policy='auto'):
                 cost, path = min(compatible, key=lambda state: state[0])
                 next_states.append((cost + rank, path + [(index, candidate)]))
         if not next_states:
-            raise ValueError('Kronologi lirik tidak pasti; fallback tidak boleh menebak timing')
+            # Preserve the best compatible prefix as evidence for the isolated
+            # CTC repair worker. Default callers still get a rejecting error.
+            _, prefix = min(states, key=lambda state: state[0])
+            for previous_index, previous in prefix:
+                chosen[previous_index] = copy.deepcopy(previous)
+            raise ChronologyConflict(chosen, omitted)
         states = next_states
     _, path = min(states, key=lambda state: state[0])
     for index, candidate in path:

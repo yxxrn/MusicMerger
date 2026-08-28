@@ -553,6 +553,105 @@ class SyncTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             select_lines(lines, copy.deepcopy(lines), 40)
 
+    def test_chronology_error_preserves_evidence_for_bounded_acoustic_repair(self):
+        from musicmerger.fallback import select_lines, ChronologyConflict
+        small = self.fallback_lines(); medium = copy.deepcopy(small)
+        small[0]['matched_words'] = 2
+        medium[0]['wend'] = 4.2
+        small[1]['wstart'] = 4.02
+        medium[1]['matched_words'] = 2
+        before = copy.deepcopy((small, medium))
+        with self.assertRaises(ChronologyConflict) as caught:
+            select_lines(small, medium, 40)
+        self.assertEqual(caught.exception.lines[0]['wend'], 4.2)
+        self.assertEqual(caught.exception.lines[1]['wstart'], 4.02)
+        self.assertEqual((small, medium), before)
+
+    def test_boundary_repair_uses_acoustic_spans_and_rejects_unsafe_candidates(self):
+        from musicmerger.boundary_repair import repair_lines
+        lines = self.fallback_lines()
+        lines[1].update(wstart=3.8,wend=5.8,
+                        words=[[(3.8+j*.4)*1000,(4.2+j*.4)*1000] for j in range(5)])
+        original = copy.deepcopy(lines)
+        def align(start, end, tokens):
+            return [dict(start=2+j*.4, end=2+(j+1)*.4, score=.9) for j in range(len(tokens))], 'diagnostic'
+        repaired, report = repair_lines(lines, 40, align)
+        self.assertEqual(repaired[0]['wend'], 4)
+        self.assertEqual(repaired[1]['wstart'], 4)
+        self.assertEqual(repaired[1]['words'][-1][1], 6000)
+        self.assertEqual(lines, original)
+        self.assertEqual(len(report), 1)
+        def low(start, end, tokens):
+            spans, transcript = align(start,end,tokens)
+            return [dict(x,score=.01) for x in spans], transcript
+        with self.assertRaisesRegex(ValueError, 'CTC'):
+            repair_lines(lines,40,low)
+        lines[1]['wstart'] = 1
+        with self.assertRaises(ValueError):
+            repair_lines(lines,40,align)
+        lines = original; lines[1]['wstart'] = 2.5
+        with self.assertRaises(ValueError):
+            repair_lines(lines,40,align)
+
+    def test_boundary_repair_does_not_cross_omissions_or_call_model_when_ordered(self):
+        from musicmerger.boundary_repair import repair_lines
+        lines = self.fallback_lines()
+        infer = mock.Mock(side_effect=AssertionError('Should not infer'))
+        repaired, report = repair_lines(lines,40,infer)
+        self.assertEqual(repaired,lines); self.assertEqual(report,[])
+        lines[1].update(omitted=True,wstart=None,wend=None)
+        lines[2]['wstart']=3.8
+        with self.assertRaises(ValueError):
+            repair_lines(lines,40,infer)
+
+    def test_boundary_repair_rejects_invalid_acoustic_evidence_without_mutating_input(self):
+        from musicmerger.boundary_repair import repair_lines
+        lines = self.fallback_lines()
+        lines[1].update(wstart=3.8, wend=5.8)
+        before = copy.deepcopy(lines)
+        valid = [dict(start=2+j*.4, end=2+(j+1)*.4, score=.9) for j in range(10)]
+        variants = [valid[:-1]]
+        for index, changes in ((0, dict(start=float('nan'))), (0, dict(score=float('inf'))),
+                               (0, dict(start=0)), (9, dict(end=7)),
+                               (1, dict(start=2.1)), (0, dict(score=1.1))):
+            spans = copy.deepcopy(valid); spans[index].update(changes); variants.append(spans)
+        # High scores cannot justify shifting a line by more than the allowed distance.
+        variants.append([dict(start=2+j*.1, end=2+(j+1)*.1, score=.99) for j in range(10)])
+        for spans in variants:
+            with self.subTest(spans=spans), self.assertRaises(ValueError):
+                repair_lines(lines, 40, lambda *args: (spans, 'diagnostic'))
+            self.assertEqual(lines, before)
+
+    def test_sync_stops_if_boundary_worker_fails_and_uses_repaired_reference_on_success(self):
+        from musicmerger import sync
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); audio = root/'a.mp3'; md = root/'a.md'
+            audio.write_bytes(b'audio'); md.write_text('these are five clear words')
+            support = root/'support'; support.mkdir()
+            (support/'asr-cache.json').write_text(json.dumps(dict(detected_language='en')))
+            lines = self.fallback_lines(); lines[1]['wstart'] = 3.8
+            with mock.patch.object(sync.karaoke, 'input_files', return_value=(None,audio,md)), \
+                 mock.patch.object(sync.karaoke, 'parse_lyrics', return_value=[]), \
+                 mock.patch.object(sync.karaoke, 'whisper_words', return_value=[]), \
+                 mock.patch.object(sync.karaoke, 'build_line_timing', return_value=lines), \
+                 mock.patch.object(sync.karaoke, 'ffprobe_duration', return_value=40), \
+                 mock.patch.object(sync, 'analysis_audio', return_value=(audio,'disabled')), \
+                 mock.patch.object(sync, 'reuse_asr_cache'), \
+                 mock.patch.object(sync, 'model_for', return_value=root/'model'), \
+                 mock.patch.object(sync.importlib.util, 'find_spec', return_value=True), \
+                 mock.patch.object(sync, 'run_command', side_effect=RuntimeError('CTC rejected')) as run:
+                with self.assertRaisesRegex(RuntimeError, 'CTC rejected'):
+                    sync.prepare(root, root)
+                self.assertEqual(run.call_count, 1)
+                self.assertIn('musicmerger.boundary_repair', run.call_args.args[0])
+                run.reset_mock(); run.side_effect = None
+                sync.prepare(root, root)
+                self.assertEqual(run.call_count, 2)
+                command = run.call_args.args[0]
+                self.assertIn('musicmerger.acoustic', command)
+                self.assertIn(str(support/'reference-repaired.json'), command)
+                self.assertIn('--full', command)
+
     def test_strict_policy_rejects_missing_lines_and_cli_exposes_policy(self):
         from musicmerger.fallback import select_lines
         lines = self.fallback_lines(); lines[-1]['wstart'] = None

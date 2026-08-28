@@ -7,7 +7,7 @@ import sys
 
 from . import renderer as karaoke
 from .process import run_command
-from .fallback import POLICIES, POLICY, select_lines, supported
+from .fallback import POLICIES, POLICY, select_lines, supported, ChronologyConflict
 
 from .paths import ROOT
 
@@ -98,7 +98,12 @@ def prepare(folder, job, *, language='auto', align_model=None, vocals='auto', ly
         words = karaoke.whisper_words(analysis, support / 'asr-medium-cache.json',
                                       language=detected, model_name='medium')
         medium_lines = karaoke.build_line_timing(lyrics, words)
-    lines, omitted = select_lines(small_lines, medium_lines, duration, policy=lyric_policy)
+    boundary_conflict = False
+    try:
+        lines, omitted = select_lines(small_lines, medium_lines, duration, policy=lyric_policy)
+    except ChronologyConflict as conflict:
+        lines, omitted = conflict.lines, conflict.omitted
+        boundary_conflict = True
     selection = dict(policy=POLICY, source_words=[x['words_text'] for x in lines],
                      source_line_count=len(lines), omitted_lines=omitted) if omitted else None
     if omitted:
@@ -107,8 +112,16 @@ def prepare(folder, job, *, language='auto', align_model=None, vocals='auto', ly
     reference = support / 'reference.json'
     reference.write_text(json.dumps(dict(audio=karaoke.audio_fingerprint(audio),
         lyrics_sha256=karaoke.audio_fingerprint(md)['sha256'], song_duration=duration,
-        lines=lines, language=detected, separation=separation, selection=selection),
+        lines=lines, language=detected, separation=separation, selection=selection,
+        analysis_audio_sha256=karaoke.audio_fingerprint(analysis)['sha256']),
         ensure_ascii=False, indent=2), encoding='utf-8')
+    if boundary_conflict:
+        print('Konflik batas ASR: periksa jendela lokal dengan CTC; tidak menggeser timestamp.',flush=True)
+        repaired = support / 'reference-repaired.json'
+        run_command([sys.executable,'-B','-m','musicmerger.boundary_repair',str(reference),
+                     '--audio',str(analysis),'--model-dir',str(model),'--out',str(repaired)],
+                    support/'boundary-repair.log')
+        reference = repaired
     command = [sys.executable, '-B', '-m', 'musicmerger.acoustic', str(folder),
                '--reference', str(reference), '--model-dir', str(model), '--full', '--refine',
                '--language', detected, '--out', str(job / 'timing/timing.json')]
