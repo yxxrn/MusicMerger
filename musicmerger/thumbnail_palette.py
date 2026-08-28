@@ -168,10 +168,12 @@ def _required_alpha(samples, colors):
     return high
 
 
-def choose_palette(frame, *, energetic=False, rows=None):
+def choose_palette(frame, *, energetic=False, rows=None, text_mask=None):
     if rows is None:
         rows = [dict(box=(frame.width//5, frame.height//3, frame.width*4//5, frame.height*2//3))]
-    samples = _samples(frame, rows)
+    # Use the same pixels as final contrast verification. Box interpolation can
+    # smooth away dark details and select a palette the glyph check cannot use.
+    samples = _samples(frame, rows, text_mask)
     clusters = dominant_colors(frame)
     choices = []
     for candidate, harmony_cost in _candidates(clusters, energetic):

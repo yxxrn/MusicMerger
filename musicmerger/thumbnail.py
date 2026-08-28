@@ -153,8 +153,8 @@ def layout_title(title, font_path):
     return rows
 
 
-def choose_colors(frame, context, rows=None):
-    return choose_palette(frame, energetic=is_energetic(context), rows=rows)
+def choose_colors(frame, context, rows=None, *, text_mask=None):
+    return choose_palette(frame, energetic=is_energetic(context), rows=rows, text_mask=text_mask)
 
 
 def extract_frame(video, output):
@@ -207,7 +207,6 @@ def generate(folder, video, audio, md, output, *, font_dir=None):
     else:
         caption = ''
     contrast_rows = ([dict(box=caption_box)] if caption_box else []) + rows
-    colors = choose_colors(frame, context, rows=contrast_rows)
     text_mask = Image.new('L', SIZE)
     ink = ImageDraw.Draw(text_mask)
     for row in rows:
@@ -215,6 +214,7 @@ def generate(folder, video, audio, md, output, *, font_dir=None):
                  font=ImageFont.truetype(str(font['path']), row['size']), fill=255)
     if caption:
         ink.text((640,150), caption, font=caption_font, anchor='mt', fill=255)
+    colors = choose_colors(frame, context, rows=contrast_rows, text_mask=text_mask)
     canvas, contrast = contrast_backdrop(frame, contrast_rows, colors, text_mask=text_mask)
     shadow = Image.new('RGBA',SIZE)
     shadow_draw = ImageDraw.Draw(shadow)

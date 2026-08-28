@@ -185,6 +185,19 @@ class ThumbnailTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'mask'):
             thumb.contrast_backdrop(frame, rows, colors, text_mask=Image.new('L', frame.size))
 
+    def test_palette_selection_keeps_dark_details_beneath_actual_glyphs(self):
+        # Downsampling a bright box smooths this dark detail out. The glyph
+        # sampler still sees it, so palette selection must use that sampler too.
+        frame = Image.new('RGB', (1280, 720), (190, 190, 190))
+        rows = [dict(box=(240, 250, 1040, 510))]
+        ink = Image.new('L', frame.size)
+        ImageDraw.Draw(ink).rectangle(rows[0]['box'], fill=255)
+        frame.putpixel((244, 254), (0, 0, 0))
+        colors = thumb.choose_colors(frame, 'calm', rows=rows, text_mask=ink)
+        _, report = thumb.contrast_backdrop(frame, rows, colors, text_mask=ink)
+        self.assertGreaterEqual(min(report['ratios']), 4.5)
+
+
     def test_generate_writes_valid_jpeg_and_report_without_touching_sources(self):
         md, data = self.metadata()
         video = self.root / 'video.mp4'; video.write_bytes(b'source')

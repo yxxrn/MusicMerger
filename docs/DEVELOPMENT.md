@@ -110,9 +110,10 @@ python -B -m unittest discover -s tests -p test_project_layout.py -q
   antarbaris tidak diisi blok. Alpha dibatasi 189/255 untuk teks terang dan
   140/255 untuk teks gelap; bayangan dekoratif juga dipersempit (blur 3 px).
 - Kontras simetris (luminans terang+0.05)/(luminans gelap+0.05) diuji terhadap
-  setiap pixel unik pada sampel 100x32. Seleksi palet masih menilai bbox agar
-  warna tetap stabil; verifikasi akhir memakai nearest sampling yang sejajar
-  dengan mask, hanya inti glyph coverage >=192/255. Pencarian alpha menargetkan
+  setiap pixel unik pada sampel 100x32. Seleksi palet dan verifikasi akhir memakai
+  nearest sampling yang sama, sejajar dengan mask, hanya inti glyph coverage
+  >=192/255. Ini mencegah detail gelap hilang saat estimasi sehingga palet terpilih
+  tidak bisa memenuhi batas koreksi ketika diperiksa. Pencarian alpha menargetkan
   4.55, lalu hasil compositing aktual diverifikasi >=4.5. Gagal berarti berhenti.
   Angka ini tidak berlaku untuk ruang kosong bbox, piksel antialias tipis, atau
   tepian halo. Laporan mencatat coverage= glyphs dan support_area_fraction.
